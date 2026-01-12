@@ -21,3 +21,18 @@
 .custom-markdown ol ol {
   margin-left: 20px;
 }
+
+/* Reference list item styling */
+.reference-list-item {
+  transition: background-color 300ms ease-in-out;
+}
+
+.reference-list-item.citation-hovered {
+  background-color: rgba(225, 129, 88, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  .reference-list-item.citation-hovered {
+    background-color: rgba(225, 129, 88, 0.12);
+  }
+}
