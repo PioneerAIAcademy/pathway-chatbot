@@ -1,5 +1,5 @@
 import "katex/dist/katex.min.css";
-import { FC, memo } from "react";
+import { FC, memo, useMemo } from "react";
 import ReactMarkdown, { Options } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -37,6 +37,37 @@ const preprocessMedia = (content: string) => {
 };
 
 /**
+ * Convert [^number] format to [citation:index]() format
+ * Maps footnote numbers to sorted source indices
+ */
+const preprocessFootnoteCitations = (content: string, sources?: SourceData) => {
+  if (sources && sources.nodes.length > 0) {
+    // Create sorted index mapping: footnote number -> sorted array index
+    const sortedSources = sources.nodes.slice().sort((a, b) => {
+      const getNumber = (id: string) => parseInt(id.match(/^\d+/)?.[0] || "0", 10);
+      return getNumber(a.citation_node_id) - getNumber(b.citation_node_id);
+    });
+    
+    // Match [^1], [^2], etc.
+    const footnoteRegex = /\[\^(\d+)\]/g;
+    content = content.replace(footnoteRegex, (match, number) => {
+      const footnoteNum = parseInt(number, 10);
+      // Find the index in sorted array where citation_node_id matches the footnote number
+      const sortedIndex = sortedSources.findIndex(node => {
+        const nodeNum = parseInt(node.citation_node_id.match(/^\d+/)?.[0] || "0", 10);
+        return nodeNum === footnoteNum;
+      });
+      
+      if (sortedIndex >= 0) {
+        return `[citation:${sortedIndex}]()`;
+      }
+      return match; // Keep original if not found
+    });
+  }
+  return content;
+};
+
+/**
  * Update the citation flag [citation:id]() to the new format [citation:index](url)
  */
 const preprocessCitations = (content: string, sources?: SourceData) => {
@@ -46,6 +77,10 @@ const preprocessCitations = (content: string, sources?: SourceData) => {
     // Find all the citation references in the content
     while ((match = citationRegex.exec(content)) !== null) {
       const citationId = match[1];
+      // Check if it's already an index (numeric)
+      if (/^\d+$/.test(citationId)) {
+        continue; // Already processed by preprocessFootnoteCitations
+      }
       // Find the source node with the id equal to the citation-id, also get the index of the source node
       const sourceNode = sources.nodes.find((node) => node.id === citationId);
       // If the source node is found, replace the citation reference with the new format
@@ -65,7 +100,10 @@ const preprocessCitations = (content: string, sources?: SourceData) => {
 
 const preprocessContent = (content: string, sources?: SourceData) => {
   return preprocessCitations(
-    preprocessMedia(preprocessLaTeX(content)),
+    preprocessFootnoteCitations(
+      preprocessMedia(preprocessLaTeX(content)),
+      sources,
+    ),
     sources,
   );
 };
@@ -78,6 +116,23 @@ export default function Markdown({
   sources?: SourceData;
 }) {
   const processedContent = preprocessContent(content, sources);
+
+  // Create sorted sources array to match chat-sources.tsx display order
+  const sortedSources = useMemo(() => 
+    sources?.nodes.slice().sort((a, b) => {
+      const getNumber = (id: string) => parseInt(id.match(/^\d+/)?.[0] || "0", 10);
+      return getNumber(a.citation_node_id) - getNumber(b.citation_node_id);
+    }),
+    [sources?.nodes]
+  );
+
+  // Create unique group ID to scope DOM queries (must match chat-sources.tsx)
+  const groupId = useMemo(() => {
+    if (sources?.nodes && sources.nodes.length > 0) {
+      return sources.nodes[0].id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 16);
+    }
+    return '';
+  }, [sources?.nodes]);
 
   return (
     <MemoizedReactMarkdown
@@ -126,8 +181,9 @@ export default function Markdown({
             children[0].startsWith("citation:")
           ) {
             const index = Number(children[0].replace("citation:", ""));
-            if (!isNaN(index)) {
-              return <SourceNumberButton index={index} />;
+            if (!isNaN(index) && sortedSources && sortedSources[index]) {
+              const sourceUrl = sortedSources[index].url;
+              return <SourceNumberButton index={index} url={sourceUrl} groupId={groupId} />;
             } else {
               // citation is not looked up yet, don't render anything
               return <></>;

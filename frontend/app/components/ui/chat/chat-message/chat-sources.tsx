@@ -23,6 +23,25 @@ export function ChatSources({ data }: { data: SourceData }) {
   const contentRef = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(0);
 
+  // Create a unique group ID based on first source to scope DOM queries
+  const groupId = useMemo(() => {
+    if (data.nodes.length > 0) {
+      // Use first node's ID as unique identifier for this sources group
+      return data.nodes[0].id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 16);
+    }
+    return '';
+  }, [data.nodes]);
+
+  const sortedSources = useMemo(
+    () =>
+      data.nodes.slice().sort((a, b) => {
+        const getNumber = (id: string) =>
+          parseInt(id.match(/^\d+/)?.[0] || "0", 10);
+        return getNumber(a.citation_node_id) - getNumber(b.citation_node_id);
+      }),
+    [data.nodes]
+  );
+
   const documents: Document[] = useMemo(() => {
     const nodesByUrl: Record<string, SourceNode[]> = {};
     data.nodes.forEach((node) => {
@@ -37,19 +56,8 @@ export function ChatSources({ data }: { data: SourceData }) {
     }));
   }, [data.nodes]);
 
-  const sortedSources = useMemo(
-    () =>
-      documents
-        .flatMap((document) => document.sources)
-        .sort((a, b) => {
-          const getNumber = (url: string) =>
-            parseInt(url.match(/^\d+/)?.[0] || "0", 10);
-          return getNumber(a.citation_node_id) - getNumber(b.citation_node_id);
-        }),
-    [documents]
-  );
-
-  // Dynamic height update
+  // Dynamic height update - only recalculate when expansion state or source count changes
+  const sourceCount = data.nodes.length;
   useEffect(() => {
     if (!contentRef.current) return;
 
@@ -65,7 +73,7 @@ export function ChatSources({ data }: { data: SourceData }) {
     updateHeight();
     window.addEventListener("resize", updateHeight);
     return () => window.removeEventListener("resize", updateHeight);
-  }, [isExpanded, sortedSources]);
+  }, [isExpanded, sourceCount]);
 
   if (documents.length === 0) return null;
 
@@ -116,20 +124,27 @@ export function ChatSources({ data }: { data: SourceData }) {
         }}
       >
         <div ref={contentRef} className="pt-2 space-y-1">
-          {sortedSources.map((node: SourceNode, index: number) => (
-            <a
-              key={index}
-              href={node.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-start gap-2 text-[13px] sm:text-sm text-[#3D3D3A] dark:text-[#F9F8F6] py-1 group"
-            >
-              <span className="text-[#E18158] font-medium whitespace-nowrap flex-shrink-0">
-                ^{index + 1}
-              </span>
-              <span className="break-all hover:underline">{node.url}</span>
-            </a>
-          ))}
+          {sortedSources.map((node: SourceNode, index: number) => {
+            const displayText = (node.metadata?.file_name as string) || node.url;
+            
+            return (
+              <div key={index} className="py-1">
+                <a
+                  href={node.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-citation-group={groupId}
+                  data-citation-index={index}
+                  className="reference-list-item inline-flex items-start gap-2 text-[13px] sm:text-sm text-[#3D3D3A] dark:text-[#F9F8F6] px-2 py-1 rounded-md group transition-all duration-300"
+                >
+                  <span className="text-[#E18158] font-medium whitespace-nowrap flex-shrink-0">
+                    ^{index + 1}
+                  </span>
+                  <span className="group-hover:underline break-all">{displayText}</span>
+                </a>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -169,20 +184,61 @@ export function SourceInfo({
 export function SourceNumberButton({
   index,
   className,
+  url,
+  groupId,
 }: {
   index: number;
   className?: string;
+  url?: string;
+  groupId?: string;
 }) {
-  return (
+  const handleMouseEnter = () => {
+    if (url && groupId) {
+      const refItem = document.querySelector(`.reference-list-item[data-citation-group="${groupId}"][data-citation-index="${index}"]`);
+      if (refItem) {
+        refItem.classList.add('citation-hovered');
+      }
+    }
+  };
+
+  const handleMouseLeave = () => {
+    if (url && groupId) {
+      const refItem = document.querySelector(`.reference-list-item[data-citation-group="${groupId}"][data-citation-index="${index}"]`);
+      if (refItem) {
+        refItem.classList.remove('citation-hovered');
+      }
+    }
+  };
+
+  const badgeContent = (
     <span
       className={cn(
-        "inline-flex items-center justify-center px-1.5 rounded-full bg-[rgba(225,129,88,0.12)] dark:bg-[#242628] text-[#C6613F] dark:text-[#E18158] text-[9px] leading-[14px] font-semibold align-super",
+        "inline-flex items-center justify-center font-normal",
+        url ? "text-blue-600 dark:text-blue-400 cursor-pointer hover:underline transition-all" : "text-[#C6613F] dark:text-[#E18158]",
         className
       )}
     >
-      ^{index + 1}
+      [{index + 1}]
     </span>
   );
+
+  if (url) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="citation-link no-underline hover:text-blue-800 dark:hover:text-blue-300"
+        data-citation-index={index}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+      >
+        {badgeContent}
+      </a>
+    );
+  }
+
+  return badgeContent;
 }
 
 function DocumentInfo({ document }: { document: Document }) {
