@@ -6,6 +6,7 @@ import DisclaimerMessage from "./disclaimer-message";
 import Greeting from "./greeting";
 import { ChatInput, ChatMessages } from "./ui/chat";
 import { useClientConfig } from "./ui/chat/hooks/use-config";
+import { getSessionId, getDeviceId } from "../utils/session";
 
 export default function ChatSection() {
   const { backend } = useClientConfig();
@@ -13,6 +14,12 @@ export default function ChatSection() {
   const [isAcmChecked, setIsAcmChecked] = useState(false);
   const [hasStartedChat, setHasStartedChat] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [deviceId, setDeviceId] = useState<string>("");
+
+  // Load device fingerprint on mount (async)
+  useEffect(() => {
+    getDeviceId().then(setDeviceId);
+  }, []);
   
   const {
     messages,
@@ -30,6 +37,8 @@ export default function ChatSection() {
     api: `${backend}/api/chat`,
     headers: {
       "Content-Type": "application/json",
+      "X-Session-ID": getSessionId(),
+      "X-Device-ID": deviceId,
     },
     onError: (error: unknown) => {
       if (!(error instanceof Error)) throw error;

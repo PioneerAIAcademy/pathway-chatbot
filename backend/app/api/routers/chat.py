@@ -24,6 +24,7 @@ from app.utils.localization import LocalizationManager
 from langfuse.decorators import langfuse_context, observe
 from app.langfuse import langfuse
 from app.utils.geo_ip import get_geo_data
+import os
 
 chat_router = r = APIRouter()
 
@@ -43,7 +44,7 @@ def _log_exception_trace():
 
 # streaming endpoint - delete if not needed
 @r.post("")
-@observe()
+@observe(as_type="generation")
 async def chat(
     request: Request,
     data: ChatData,
@@ -71,29 +72,57 @@ async def chat(
         if blocked_message:
             # Detect user's language for consistent blocked response localization
             user_language = LocalizationManager.detect_language(last_message_content)
-            
+            role = data.data.get("role", "missionary") if data.data else "missionary"
+
+            # Get session ID and device ID from headers
+            session_id = request.headers.get("X-Session-ID", request.headers.get("X-Session-Id"))
+            device_id = request.headers.get("X-Device-ID")
+
+            # Create tags for blocked request
+            blocked_tags = [
+                f"language:{user_language}",
+                f"role:{role}",
+                "feature:chat",
+                f"security:risk_{security_details.get('risk_level', 'UNKNOWN').lower()}"
+            ]
+
             # Log security event for monitoring
             logger.warning(
                 f"Security validation blocked suspicious input - "
                 f"Risk: {security_details.get('risk_level', 'UNKNOWN')}, "
                 f"Reason: {security_details.get('reason', 'unknown')}, "
-                f"IP: {request.client.host if request.client else 'unknown'}"
+                f"IP: {client_ip}"
             )
-            
-            # Send blocked request to Langfuse with security metadata and geo_data
+
+            # Update trace with structured fields (trace-level)
             langfuse_context.update_current_trace(
+                name="chat",
                 input=last_message_content,
                 output=blocked_message,
+                session_id=session_id,
+                user_id=device_id,  # Use device fingerprint as user_id for tracking
+                tags=blocked_tags,
+                release=os.getenv("ENVIRONMENT", "development"),
                 metadata={
-                    "security_blocked": True,
-                    "risk_level": security_details.get("risk_level", "UNKNOWN"),
-                    "security_details": security_details,
-                    "blocked_reason": security_details.get("reason", "security_validation_failed"),
+                    "security_validation": {
+                        "blocked": True,
+                        "risk_level": security_details.get("risk_level", "UNKNOWN"),
+                        "reason": security_details.get("reason", "security_validation_failed"),
+                        "details": security_details
+                    },
+                    "geo_data": geo_data,
+                    "client_ip": client_ip,
                     "user_language": user_language,
-                    **geo_data
+                    "role": role
                 }
             )
-            
+
+            # Update observation with WARNING level
+            langfuse_context.update_current_observation(
+                level="WARNING",
+                status_message=f"Blocked: {security_details.get('reason', 'security_validation_failed')}"
+            )
+
             # Flush Langfuse trace before streaming response to ensure data is captured
             langfuse.flush()
             
@@ -158,41 +187,71 @@ async def chat(
             if role == "ACM"
             else last_message_content
         )
-        
+
         # Detect user's language for consistent frontend localization
         user_language = LocalizationManager.detect_language(last_message_content)
-        
-        # Enhanced metadata with security information
+
+        # Get session ID and device ID from headers
+        session_id = request.headers.get("X-Session-ID", request.headers.get("X-Session-Id"))
+        device_id = request.headers.get("X-Device-ID")
+
+        # Create tags for successful request
+        success_tags = [
+            f"language:{user_language}",
+            f"role:{role}",
+            "feature:chat",
+            "source:rag"
+        ]
+
+        # Add security tag based on validation
+        if is_suspicious:
+            success_tags.append(f"security:risk_{security_details.get('risk_level', 'LOW').lower()}")
+        else:
+            success_tags.append("security:clean")
+
+        # Build security metadata
         security_metadata = {
             "input_validated": True,
-            "input_sanitized": True
+            "is_suspicious": is_suspicious,
+            "risk_level": security_details.get("risk_level", "NONE") if is_suspicious else "NONE"
         }
-        
-        # Only add risk classification for suspicious inputs
         if is_suspicious:
-            security_metadata.update({
-                "is_suspicious": True,
-                "risk_level": security_details.get("risk_level", "LOW"),
-                "security_details": security_details
-            })
-        else:
-            security_metadata["is_suspicious"] = False
-        
-        enhanced_metadata = {
-            "retrieved_docs": retrieved,
+            security_metadata["details"] = security_details
+
+        # Build clean metadata with only custom business data
+        clean_metadata = {
             "security_validation": security_metadata,
+            "geo_data": geo_data,
+            "client_ip": client_ip,
             "user_language": user_language,
-            **geo_data
+            "role": role,
+            "retrieved_docs": retrieved,
+            "retrieved_docs_count": len(response.source_nodes)
         }
-        
+
+        # Update trace with structured fields (trace-level)
         langfuse_context.update_current_trace(
-            input=langfuse_input, 
-            output=response.response, 
-            metadata=enhanced_metadata
+            name="chat",
+            input=langfuse_input,
+            output=response.response,
+            session_id=session_id,
+            user_id=device_id,  # Use device fingerprint as user_id for tracking
+            tags=success_tags,
+            release=os.getenv("ENVIRONMENT", "development"),
+            metadata=clean_metadata
+        )
+
+        # Get model name from params or environment
+        model_name = params.get("model", os.getenv("MODEL", "gpt-4o-mini"))
+
+        # Update observation - tokens/costs are captured by Langfuse callback handler
+        langfuse_context.update_current_observation(
+            model=model_name,
+            level="DEFAULT",
+            status_message="Chat completed successfully"
         )
 
         trace_id = langfuse_context.get_current_trace_id()
-        logger.info(f"We got the trace id to be : {trace_id}")
 
         return VercelStreamResponse(
             request, event_handler, response, data, tokens, trace_id=trace_id, user_language=user_language, skip_suggestions=is_suspicious
@@ -201,6 +260,16 @@ async def chat(
     except Exception as e:
         logger.exception("Error in chat engine", exc_info=True)
         _log_exception_trace()
+
+        # Track exception in Langfuse with ERROR level
+        try:
+            langfuse_context.update_current_observation(
+                level="ERROR",
+                status_message=f"Exception: {type(e).__name__} - {str(e)}"
+            )
+        except Exception as langfuse_error:
+            logger.error(f"Failed to update Langfuse with error: {langfuse_error}")
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error in chat engine: {e}",
@@ -369,6 +438,7 @@ async def thumbs_request(request: ThumbsRequest):
     value = request.value
     score_id = f'{trace_id}_feedback'
 
+    # Record the user feedback score
     langfuse.score(
         id=score_id,
         trace_id=trace_id,
@@ -376,6 +446,19 @@ async def thumbs_request(request: ThumbsRequest):
         data_type="CATEGORICAL",
         value=value,
     )
+
+    # If feedback is negative (thumbs down), update trace with DEBUG level
+    if value == "bad":
+        try:
+            # Fetch the trace and update its level to DEBUG for negative feedback
+            trace = langfuse.get_trace(trace_id)
+            if trace:
+                # Note: We can't update past observations directly via API
+                # The DEBUG level should be set at observation creation time
+                # This score will be visible in Langfuse UI for filtering
+                logger.info(f"Negative feedback received for trace {trace_id}")
+        except Exception as e:
+            logger.error(f"Failed to process negative feedback for trace {trace_id}: {e}")
 
     return {"feedback": value}
 
