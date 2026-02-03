@@ -1,11 +1,7 @@
 import Image from "next/image";
-import { HelpCircle } from "lucide-react";
-import { ThemeSwitcher } from "./theme-switcher";
-import { MobileSettings } from "./mobile-settings";
+import { SettingsMenu } from "./settings-menu";
 
 export default function Header() {
-  const hints = "https://missionaries.prod.byu-pathway.psdops.com/How-to-use-the-Missionary-Assistant"
-
   return (
     <header className="w-full bg-[#FFC328] px-4 sm:px-6 pb-2 pt-0 min-[480px]:pt-2 min-[480px]:pb-2 flex-shrink-0">
       {/* Container for screens >= 480px - single row layout */}
@@ -30,27 +26,9 @@ export default function Header() {
           </h1>
         </div>
         
-        {/* Right side - Theme switcher and Help (Desktop) / Settings (Mobile) */}
+        {/* Right side - Settings menu (all screens) */}
         <div className="flex items-center gap-1 sm:gap-2 z-10">
-          {/* Desktop: Theme Switcher */}
-          <div className="hidden sm:block">
-            <ThemeSwitcher />
-          </div>
-          
-          {/* Desktop: Help Button */}
-          <a 
-            href={hints} 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="hidden sm:flex items-center gap-1 px-3 py-1.5 rounded-full border border-black/50 text-[#646362] hover:bg-black/5 transition-colors"
-            title="Get help and learn how to use the Missionary Assistant"
-          >
-            <HelpCircle className="h-4 w-4" />
-            <span className="text-sm font-semibold">Help</span>
-          </a>
-          
-          {/* Mobile: Settings Gear Icon with Dialog */}
-          <MobileSettings />
+          <SettingsMenu />
         </div>
       </div>
 
@@ -69,7 +47,7 @@ export default function Header() {
         
         {/* Settings Icon - absolute positioned, vertically centered */}
         <div className="absolute right-0 top-1/2 -translate-y-1/2 z-50">
-          <MobileSettings />
+          <SettingsMenu />
         </div>
         
         {/* Title - below logo */}
