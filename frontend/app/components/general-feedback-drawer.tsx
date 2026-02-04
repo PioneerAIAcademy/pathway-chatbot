@@ -242,8 +242,18 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
     } catch (err: any) {
       const name = err?.name as string | undefined;
       const msg = (err?.message as string | undefined) ?? "";
+      const msgLower = msg.toLowerCase();
 
       // Chrome sometimes reports "Could not perform screen capture." in these cases.
+      if (
+        name === "NotReadableError" ||
+        msgLower.includes("could not perform screen capture") ||
+        msgLower.includes("could not start video source")
+      ) {
+        showToast("Screen capture is blocked by system permissions. Enable screen recording for your browser and try again.");
+        return;
+      }
+
       if (name === "NotAllowedError" || name === "SecurityError") {
         if (msg.toLowerCase().includes("insecure")) {
           showToast("Screen capture requires HTTPS. Please upload an image instead.");
