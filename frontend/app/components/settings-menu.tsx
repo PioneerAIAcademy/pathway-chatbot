@@ -9,7 +9,6 @@ import { GeneralFeedbackDrawer } from "./general-feedback-drawer";
 
 export function SettingsMenu() {
   const [isOpen, setIsOpen] = React.useState(false);
-  const [isRotating, setIsRotating] = React.useState(false);
   const [isFeedbackOpen, setIsFeedbackOpen] = React.useState(false);
   const { theme, setTheme } = useTheme();
 
@@ -17,9 +16,7 @@ export function SettingsMenu() {
     "https://missionaries.prod.byu-pathway.psdops.com/How-to-use-the-Missionary-Assistant";
 
   const handleToggle = () => {
-    setIsRotating(true);
     setIsOpen((v) => !v);
-    window.setTimeout(() => setIsRotating(false), 300);
   };
 
   const handleThemeChange = (newTheme: string) => {
@@ -61,9 +58,11 @@ export function SettingsMenu() {
           title="Settings"
         >
           <Settings
-            className={`h-5 w-5 text-[#646362] transition-transform duration-300 ${
-              isRotating ? "rotate-90" : ""
-            }`}
+            className={[
+              "h-5 w-5 text-[#646362]",
+              "transition-transform duration-200 ease-out",
+              isOpen ? "rotate-90" : "rotate-0",
+            ].join(" ")}
           />
         </Button>
 
@@ -160,4 +159,3 @@ export function SettingsMenu() {
     </>
   );
 }
-
