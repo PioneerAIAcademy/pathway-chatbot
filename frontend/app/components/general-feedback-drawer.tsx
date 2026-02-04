@@ -17,7 +17,9 @@ type GeneralFeedbackDrawerProps = {
 const MAX_FEEDBACK_LENGTH = 1000;
 const MAX_SCREENSHOT_BYTES = 6 * 1024 * 1024; // 6MB
 const SCREENSHOT_MAX_WIDTH = 1600;
-const FLASH_EXIT_MS = 240;
+const FLASH_VISIBLE_MS = 140;
+const FLASH_EXIT_MS = 420;
+const CAPTURE_READY_TIMEOUT_MS = 2500;
 
 export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawerProps) {
   const { backend = "" } = useClientConfig();
@@ -31,6 +33,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [flashMounted, setFlashMounted] = useState(false);
   const [flashVisible, setFlashVisible] = useState(false);
+  const [justCaptured, setJustCaptured] = useState(false);
 
   useEffect(() => {
     getDeviceId().then(setDeviceId);
@@ -52,6 +55,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
     setScreenshotFile(null);
     setIsSubmitting(false);
     setIsCapturing(false);
+    setJustCaptured(false);
   };
 
   const handleClose = () => {
@@ -79,7 +83,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
   const triggerFlash = () => {
     setFlashMounted(true);
     requestAnimationFrame(() => setFlashVisible(true));
-    window.setTimeout(() => setFlashVisible(false), 70);
+    window.setTimeout(() => setFlashVisible(false), FLASH_VISIBLE_MS);
     window.setTimeout(() => setFlashMounted(false), FLASH_EXIT_MS);
   };
 
@@ -101,21 +105,35 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
       // Browsers will still show a picker; we can only *prefer* the current tab.
       showToast("Select “This tab” to capture a screenshot.");
 
-      const stream = await getDisplayMedia({
-        video: {
-          cursor: "never",
-          frameRate: { ideal: 30, max: 30 },
-        },
-        audio: false,
-        preferCurrentTab: true,
-        selfBrowserSurface: "include",
-        surfaceSwitching: "exclude",
-        systemAudio: "exclude",
-      } as any);
+      let stream: MediaStream;
+      try {
+        stream = await getDisplayMedia({
+          video: {
+            cursor: "never",
+            frameRate: { ideal: 30, max: 30 },
+          },
+          audio: false,
+          preferCurrentTab: true,
+          selfBrowserSurface: "include",
+          surfaceSwitching: "exclude",
+          systemAudio: "exclude",
+        } as any);
+      } catch (err: any) {
+        // Some browsers reject non-standard constraint keys (e.g. Safari/Firefox).
+        if ((err?.name as string | undefined) === "NotAllowedError") {
+          throw err;
+        }
+        stream = await getDisplayMedia({ video: true, audio: false });
+      }
 
       const videoTrack = stream.getVideoTracks?.()[0];
       if (!videoTrack) {
         throw new Error("No video track");
+      }
+
+      const displaySurface = (videoTrack.getSettings?.() as any)?.displaySurface as string | undefined;
+      if (displaySurface && displaySurface !== "browser") {
+        showToast("Tip: choose “This tab” for best results.");
       }
 
       const video = document.createElement("video");
@@ -131,13 +149,21 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
         await video.play();
       }
 
-      await new Promise<void>((resolve) => {
-        const rvfc = (video as any).requestVideoFrameCallback as undefined | ((cb: () => void) => void);
-        if (typeof rvfc === "function") {
-          rvfc.call(video, () => resolve());
-          return;
-        }
-        setTimeout(() => resolve(), 200);
+      const startedAt = Date.now();
+      await new Promise<void>((resolve, reject) => {
+        const tick = () => {
+          const hasFrame = video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0;
+          if (hasFrame) {
+            resolve();
+            return;
+          }
+          if (Date.now() - startedAt > CAPTURE_READY_TIMEOUT_MS) {
+            reject(new Error("Timed out waiting for capture frame"));
+            return;
+          }
+          requestAnimationFrame(tick);
+        };
+        tick();
       });
 
       const vw = video.videoWidth || 0;
@@ -183,6 +209,8 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
       }
 
       setScreenshotFile(new File([blob], `screenshot-${Date.now()}.jpg`, { type: "image/jpeg" }));
+      setJustCaptured(true);
+      window.setTimeout(() => setJustCaptured(false), 900);
       triggerFlash();
     } catch (err: any) {
       const name = err?.name as string | undefined;
@@ -320,8 +348,27 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
                     </div>
                   </div>
 
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <p className="text-xs text-white/55">
+                      {isCapturing ? "Choose “This tab” in the browser prompt." : "Capture the current tab, or upload an image."}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={pickScreenshot}
+                      className="text-xs text-[#FFC328] hover:text-[#FFD155] underline underline-offset-4"
+                    >
+                      Upload instead
+                    </button>
+                  </div>
+
                   {screenshotFile && (
-                    <div className="mt-4 flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3">
+                    <div
+                      className={[
+                        "mt-4 flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3",
+                        "transition-[box-shadow,transform] duration-300 ease-out",
+                        justCaptured ? "ring-2 ring-[#FFC328]/60 shadow-[0_0_0_6px_rgba(255,195,40,0.14)]" : "",
+                      ].join(" ")}
+                    >
                       <div className="h-12 w-12 rounded-lg overflow-hidden bg-black/20 border border-white/10 flex-shrink-0">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={screenshotPreviewUrl} alt="Screenshot preview" className="h-full w-full object-cover" />
@@ -375,9 +422,10 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
         <div
           aria-hidden="true"
           className={[
-            "fixed inset-0 z-[9999] pointer-events-none bg-white",
-            "transition-opacity duration-200 ease-out",
-            flashVisible ? "opacity-60" : "opacity-0",
+            "fixed inset-0 z-[11000] pointer-events-none",
+            "bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.95),rgba(255,255,255,0)_65%)]",
+            "transition-opacity duration-300 ease-out",
+            flashVisible ? "opacity-90" : "opacity-0",
           ].join(" ")}
         />
       )}

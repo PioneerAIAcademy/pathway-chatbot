@@ -10,6 +10,8 @@ interface ToastProps {
 }
 
 export function Toast({ message, show, onClose }: ToastProps) {
+  const [mounted, setMounted] = useState(show);
+
   useEffect(() => {
     if (show) {
       const timer = setTimeout(() => {
@@ -19,13 +21,32 @@ export function Toast({ message, show, onClose }: ToastProps) {
     }
   }, [show, onClose]);
 
-  if (!show) return null;
+  useEffect(() => {
+    if (show) {
+      setMounted(true);
+      return;
+    }
+
+    // Allow exit transition to play before unmounting.
+    const timer = setTimeout(() => setMounted(false), 260);
+    return () => clearTimeout(timer);
+  }, [show]);
+
+  if (!mounted) return null;
 
   return (
-    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 md:left-auto md:right-6 md:translate-x-0 z-50 animate-in slide-in-from-bottom-5 duration-300">
-      <div className="flex items-center gap-2 bg-[#242628] dark:bg-[#2a2c2e] border border-[rgba(252,252,252,0.1)] rounded-lg px-4 py-3 shadow-lg whitespace-nowrap">
+    <div
+      className={[
+        "fixed left-1/2 top-16 -translate-x-1/2 z-[10000]",
+        "transition-[opacity,transform] duration-300 ease-out",
+        show ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2",
+      ].join(" ")}
+      role="status"
+      aria-live="polite"
+    >
+      <div className="flex items-center gap-2 bg-[#242628] border border-white/10 rounded-xl px-4 py-3 shadow-[0_14px_40px_rgba(0,0,0,0.45)]">
         <Check className="h-4 w-4 text-green-500 flex-shrink-0" />
-        <p className="text-sm text-[#FCFCFC] whitespace-nowrap">{message}</p>
+        <p className="text-sm text-[#FCFCFC]">{message}</p>
       </div>
     </div>
   );

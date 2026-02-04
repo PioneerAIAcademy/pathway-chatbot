@@ -593,11 +593,7 @@ async def general_feedback(
         name="general_feedback",
         session_id=session_id,
         user_id=device_id,
-        input={
-            "feedback": feedback_text,
-            "screenshot_url": screenshot_url,
-        },
-        output={"status": "received"},
+        input=feedback_text,
         tags=["feedback", "general"],
         metadata={
             "client_ip": client_ip,
