@@ -95,7 +95,7 @@ export function SettingsMenu() {
               <h3 className="text-[10px] font-semibold tracking-wide text-[#454540] dark:text-white/80 mb-1.5">
                 Theme
               </h3>
-              <div className="flex items-center gap-1 rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.035] dark:bg-white/5 p-1">
+              <div className="grid grid-cols-3 gap-1 rounded-xl border border-black/10 dark:border-white/10 bg-black/[0.035] dark:bg-white/5 p-1">
                 <button
                   onClick={(e) => {
                     e.preventDefault();
@@ -103,7 +103,7 @@ export function SettingsMenu() {
                     handleThemeChange("light");
                   }}
                   className={[
-                    "h-9 w-9 rounded-lg flex items-center justify-center",
+                    "h-9 w-full rounded-lg flex items-center justify-center",
                     "transition-colors",
                     "text-[#646362] dark:text-white/70",
                     "hover:bg-black/5 dark:hover:bg-white/10",
@@ -122,7 +122,7 @@ export function SettingsMenu() {
                     handleThemeChange("dark");
                   }}
                   className={[
-                    "h-9 w-9 rounded-lg flex items-center justify-center",
+                    "h-9 w-full rounded-lg flex items-center justify-center",
                     "transition-colors",
                     "text-[#646362] dark:text-white/70",
                     "hover:bg-black/5 dark:hover:bg-white/10",
@@ -141,7 +141,7 @@ export function SettingsMenu() {
                     handleThemeChange("system");
                   }}
                   className={[
-                    "h-9 w-9 rounded-lg flex items-center justify-center",
+                    "h-9 w-full rounded-lg flex items-center justify-center",
                     "transition-colors",
                     "text-[#646362] dark:text-white/70",
                     "hover:bg-black/5 dark:hover:bg-white/10",
