@@ -36,6 +36,7 @@ export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
     const feedbackBeforeOpenRef = useRef<FeedbackValue>(FeedbackValue.EMPTY);
     const [reservedSpacePx, setReservedSpacePx] = useState(0);
     const [mobilePopoverOffsetX, setMobilePopoverOffsetX] = useState(0);
+    const [mobilePopoverMaxWidthPx, setMobilePopoverMaxWidthPx] = useState<number | null>(null);
 
     const thumbsUpActive = submittedFeedback === FeedbackValue.GOOD;
     const thumbsDownActive = submittedFeedback === FeedbackValue.BAD;
@@ -91,36 +92,23 @@ export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
         const isMobile = window.matchMedia("(max-width: 639px)").matches;
         if (!isMobile) {
             setMobilePopoverOffsetX(0);
+            setMobilePopoverMaxWidthPx(null);
             return;
         }
 
         const adjust = () => {
-            const popoverRect = popover.getBoundingClientRect();
             const anchorRect = anchor.getBoundingClientRect();
             const rowRect = actionsRow.getBoundingClientRect();
 
-            // The popover is anchored at the thumbs-down button; shift it left so it starts
-            // at the same X as the action row (copy icon).
-            const currentOffset = popoverRect.left - anchorRect.left;
-            const baseOffset = rowRect.left - anchorRect.left;
+            // Mobile: anchor at thumbs-down, but align the popover's left edge with the action
+            // row (copy icon). To avoid horizontal scrolling, constrain the popover width so it
+            // can fit to the right of that aligned start point.
+            const desiredLeft = Math.max(rowRect.left, MOBILE_POPOVER_MARGIN_PX);
+            const offset = desiredLeft - anchorRect.left;
+            setMobilePopoverOffsetX(Math.round(offset));
 
-            const predictedShift = baseOffset - currentOffset;
-            const predictedLeft = popoverRect.left + predictedShift;
-            const predictedRight = popoverRect.right + predictedShift;
-
-            const minLeft = MOBILE_POPOVER_MARGIN_PX;
-            const maxRight = window.innerWidth - MOBILE_POPOVER_MARGIN_PX;
-
-            let clamp = 0;
-            if (predictedRight > maxRight) {
-                clamp -= predictedRight - maxRight;
-            }
-            if (predictedLeft < minLeft) {
-                clamp += minLeft - predictedLeft;
-            }
-
-            const next = Math.round(baseOffset + clamp);
-            setMobilePopoverOffsetX(next);
+            const maxWidth = Math.floor(window.innerWidth - desiredLeft - MOBILE_POPOVER_MARGIN_PX);
+            setMobilePopoverMaxWidthPx(maxWidth > 0 ? maxWidth : null);
         };
 
         adjust();
@@ -164,6 +152,7 @@ export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
             setIsAnimating(false);
             setIsClosing(false);
             setMobilePopoverOffsetX(0);
+            setMobilePopoverMaxWidthPx(null);
         }, CLOSE_ANIMATION_MS));
     };
 
@@ -188,13 +177,20 @@ export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
             const anchor = popoverAnchorRef.current;
             const actionsRow = rootRef.current?.parentElement;
             if (anchor && actionsRow) {
-                const base = actionsRow.getBoundingClientRect().left - anchor.getBoundingClientRect().left;
-                setMobilePopoverOffsetX(Math.round(base));
+                const rowRect = actionsRow.getBoundingClientRect();
+                const anchorRect = anchor.getBoundingClientRect();
+                const desiredLeft = Math.max(rowRect.left, MOBILE_POPOVER_MARGIN_PX);
+                setMobilePopoverOffsetX(Math.round(desiredLeft - anchorRect.left));
+
+                const maxWidth = Math.floor(window.innerWidth - desiredLeft - MOBILE_POPOVER_MARGIN_PX);
+                setMobilePopoverMaxWidthPx(maxWidth > 0 ? maxWidth : null);
             } else {
                 setMobilePopoverOffsetX(0);
+                setMobilePopoverMaxWidthPx(null);
             }
         } else {
             setMobilePopoverOffsetX(0);
+            setMobilePopoverMaxWidthPx(null);
         }
         clearTimers();
         setShowInput(true);
@@ -243,6 +239,7 @@ export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
         setIsClosing(false);
         setShowInput(false);
         setMobilePopoverOffsetX(0);
+        setMobilePopoverMaxWidthPx(null);
         clearTimers();
         // Passing an empty string clears any previous "bad" comment when switching to Good.
         await handleUserFeedback(traceId, nextValue, "");
@@ -294,6 +291,7 @@ export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
                                     styles.popover,
                                     "w-[clamp(18rem,65vw,44rem)] max-w-[calc(100vw-2.5rem)]",
                                 )}
+                                style={mobilePopoverMaxWidthPx ? { maxWidth: `${mobilePopoverMaxWidthPx}px` } : undefined}
                                 data-state={isClosing ? "closing" : "open"}
                             >
                             {/* Feedback UI */}

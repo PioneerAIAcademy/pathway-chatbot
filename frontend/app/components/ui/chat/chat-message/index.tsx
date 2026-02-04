@@ -274,7 +274,7 @@ export default function ChatMessage({
 
               {/* Action buttons - inline after message content */}
               {!isLoading && (
-                <div className="flex items-center gap-1 mt-1 mb-4">
+                <div className="flex items-start gap-1 mt-1 mb-4">
                   <Button
                     onClick={() => copyToClipboard(chatMessage.content)}
                     size="icon"
