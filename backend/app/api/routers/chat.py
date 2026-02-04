@@ -57,6 +57,7 @@ async def chat(
     risk_level = None
     security_details = {}
     chat_engine = None
+    streaming_response_returned = False
 
     try:
         last_message_content = data.get_last_message_content()
@@ -147,10 +148,15 @@ async def chat(
                     yield self.response
             
             blocked_chat_response = BlockedResponse(blocked_message)
-            tokens = [blocked_message]
-            
+
             return VercelStreamResponse(
-                request, EventCallbackHandler(), blocked_chat_response, data, tokens, skip_suggestions=True, user_language=user_language
+                request,
+                EventCallbackHandler(),
+                blocked_chat_response,
+                data,
+                skip_suggestions=True,
+                user_language=user_language,
+                emit_initial_status=False,
             )
         
         # Sanitize allowed input as additional protection
@@ -164,27 +170,6 @@ async def chat(
         params = data.data or {}
         role = params.get("role", "missionary")
         filters = generate_filters(doc_ids, role)
-        logger.info(
-            f"Creating chat engine with filters: {str(filters)}",
-        )
-        chat_engine = get_chat_engine(filters=filters, params=params)
-
-        event_handler = EventCallbackHandler()
-        chat_engine.callback_manager.handlers.append(event_handler)  # type: ignore
-
-        response = await chat_engine.astream_chat(last_message_content, messages)
-
-        retrieved = "\n\n".join(
-            [
-                f"node_id: {idx+1}\n{node.metadata['url']}\n{node.text}"
-                for idx, node in enumerate(response.source_nodes)
-            ]
-        )
-
-        # await response.aprint_response_stream()
-        tokens = []
-        async for token in response.async_response_gen():
-            tokens.append(token)
 
         langfuse_input = (
             f"(ACMs Question): {last_message_content}"
@@ -229,15 +214,14 @@ async def chat(
             "client_ip": client_ip,
             "user_language": user_language,
             "role": role,
-            "retrieved_docs": retrieved,
-            "retrieved_docs_count": len(response.source_nodes)
         }
+
+        trace_id = langfuse_context.get_current_trace_id()
 
         # Update trace with structured fields (trace-level)
         langfuse_context.update_current_trace(
             name="chat",
             input=langfuse_input,
-            output=response.response,
             session_id=session_id,
             user_id=device_id,  # Use device fingerprint as user_id for tracking
             tags=success_tags,
@@ -252,13 +236,71 @@ async def chat(
         langfuse_context.update_current_observation(
             model=model_name,
             level="DEFAULT",
-            status_message="Chat completed successfully"
+            status_message="Chat started"
         )
 
-        trace_id = langfuse_context.get_current_trace_id()
+        event_handler = EventCallbackHandler()
+        retrieval_metadata: dict[str, Any] = {}
 
+        async def _on_stream_end(final_response: str) -> None:
+            # Update trace output after streaming finishes (or client disconnects).
+            try:
+                if retrieval_metadata:
+                    clean_metadata.update(retrieval_metadata)
+                langfuse.trace(id=trace_id).update(
+                    output=final_response,
+                    metadata=clean_metadata,
+                )
+                langfuse.flush()
+            except Exception as langfuse_error:
+                logger.error(f"Failed to update Langfuse trace output: {langfuse_error}")
+
+            # Ensure chat engine memory is cleaned up after the request completes.
+            if chat_engine is not None:
+                try:
+                    chat_engine.reset()
+                    logger.debug("Chat engine memory buffer cleared")
+                except Exception as cleanup_error:
+                    logger.error(f"Failed to reset chat engine: {cleanup_error}")
+
+        async def _get_response() -> Any:
+            nonlocal chat_engine
+            logger.info(
+                f"Creating chat engine with filters: {str(filters)}",
+            )
+            chat_engine = get_chat_engine(filters=filters, params=params)
+            chat_engine.callback_manager.handlers.append(event_handler)  # type: ignore
+
+            response = await chat_engine.astream_chat(last_message_content, messages)
+
+            try:
+                retrieved = "\n\n".join(
+                    [
+                        f"node_id: {idx+1}\n{node.metadata.get('url', '')}\n{node.text}"
+                        for idx, node in enumerate(response.source_nodes)
+                    ]
+                )
+                retrieval_metadata.update(
+                    {
+                        "retrieved_docs": retrieved,
+                        "retrieved_docs_count": len(response.source_nodes),
+                    }
+                )
+            except Exception as retrieval_error:
+                logger.error(f"Failed to build retrieved docs metadata: {retrieval_error}")
+
+            return response
+
+        streaming_response_returned = True
         return VercelStreamResponse(
-            request, event_handler, response, data, tokens, trace_id=trace_id, user_language=user_language, skip_suggestions=is_suspicious
+            request,
+            event_handler,
+            _get_response(),
+            data,
+            trace_id=trace_id,
+            user_language=user_language,
+            skip_suggestions=is_suspicious,
+            on_stream_end=_on_stream_end,
         )
         # return VercelStreamResponse(request, event_handler, response, data, tokens)
     except Exception as e:
@@ -279,8 +321,8 @@ async def chat(
             detail=f"Error in chat engine: {e}",
         ) from e
     finally:
-        # Ensure chat engine memory is cleaned up after each request
-        if chat_engine is not None:
+        # If we failed before returning a streaming response, clean up immediately.
+        if not streaming_response_returned and chat_engine is not None:
             try:
                 chat_engine.reset()
                 logger.debug("Chat engine memory buffer cleared")

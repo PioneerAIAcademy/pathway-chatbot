@@ -1,52 +1,31 @@
-import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
-import { useState } from "react";
-import { Button } from "../../button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "../../collapsible";
+import { Loader2 } from "lucide-react";
 import { EventData } from "../index";
 
+/**
+ * ChatEvents component displays real-time status indicators during RAG processing.
+ * Shows inline status with randomized messages that auto-disappear when response starts.
+ */
 export function ChatEvents({
   data,
   isLoading,
+  hasResponseText,
 }: {
   data: EventData[];
   isLoading: boolean;
+  hasResponseText: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  // Get the latest status message
+  const latestMessage = data.length > 0 ? data[data.length - 1].title : "";
 
-  const buttonLabel = isOpen ? "Hide events" : "Show events";
+  // Show status ONLY while loading AND before response text appears
+  const showStatus = isLoading && !!latestMessage && !hasResponseText;
 
-  const EventIcon = isOpen ? (
-    <ChevronDown className="h-4 w-4" />
-  ) : (
-    <ChevronRight className="h-4 w-4" />
-  );
+  if (!showStatus) return null;
 
   return (
-    // Hidden: Events functionality kept for future use but not rendered
-    // <div className="border-l-2 border-indigo-400 pl-2">
-    //   <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-    //     <CollapsibleTrigger asChild>
-    //       <Button variant="secondary" className="space-x-2">
-    //         {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-    //         <span>{buttonLabel}</span>
-    //         {EventIcon}
-    //       </Button>
-    //     </CollapsibleTrigger>
-    //     <CollapsibleContent asChild>
-    //       <div className="mt-4 text-sm space-y-2">
-    //         {data.map((eventItem, index) => (
-    //           <div className="whitespace-break-spaces" key={index}>
-    //             {eventItem.title}
-    //           </div>
-    //         ))}
-    //       </div>
-    //     </CollapsibleContent>
-    //   </Collapsible>
-    // </div>
-    <></>
+    <div className="flex items-center gap-2 text-xs text-[#73726C] dark:text-[#C2C0B6]">
+      <Loader2 className="h-4 w-4 animate-spin" />
+      <span>{latestMessage}</span>
+    </div>
   );
 }

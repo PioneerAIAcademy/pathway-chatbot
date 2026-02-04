@@ -6,6 +6,9 @@ from llama_index.core.callbacks.base import BaseCallbackHandler
 from llama_index.core.callbacks.schema import CBEventType
 from llama_index.core.tools.types import ToolOutput
 from pydantic import BaseModel
+from app.api.routers.message_variations import (
+    get_retrieval_start_message,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -17,18 +20,13 @@ class CallbackEvent(BaseModel):
     event_id: str = ""
 
     def get_retrieval_message(self) -> dict | None:
-        if self.payload:
-            nodes = self.payload.get("nodes")
-            if nodes:
-                msg = f"Retrieved {len(nodes)} sources to use as context for the query"
-            else:
-                msg = f"Retrieving context for query: '{self.payload.get('query_str')}'"
-            return {
-                "type": "events",
-                "data": {"title": msg},
-            }
-        else:
-            return None
+        # Always show a non-numeric, user-friendly "in progress" message.
+        # Do not surface counts to the user.
+        msg = get_retrieval_start_message()
+        return {
+            "type": "events",
+            "data": {"title": msg},
+        }
 
     def get_tool_message(self) -> dict | None:
         func_call_args = self.payload.get("function_call")
