@@ -82,7 +82,11 @@ function ChatMessageContent({
       order: -3,
       component:
         eventData.length > 0 ? (
-          <ChatEvents isLoading={isLoading} data={eventData} />
+          <ChatEvents
+            isLoading={isLoading}
+            data={eventData}
+            hasResponseText={message.content.trim().length > 0}
+          />
         ) : null,
     },
     {
