@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, X } from "lucide-react";
 
 export type ToastType = "info" | "success" | "error";
@@ -14,12 +15,18 @@ interface ToastProps {
 
 export function Toast({ message, show, type = "info", onClose }: ToastProps) {
   const [mounted, setMounted] = useState(show);
+  const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
+  
   const accentClass =
     type === "success"
       ? "before:bg-green-500"
       : type === "error"
         ? "before:bg-red-500"
         : "before:bg-[#FFC328]";
+
+  useEffect(() => {
+    setPortalRoot(document.body);
+  }, []);
 
   useEffect(() => {
     if (show) {
@@ -41,15 +48,15 @@ export function Toast({ message, show, type = "info", onClose }: ToastProps) {
     return () => clearTimeout(timer);
   }, [show]);
 
-  if (!mounted) return null;
+  if (!mounted || !portalRoot) return null;
 
-  return (
+  const toastContent = (
     <div
       className={[
-        "fixed left-0 right-0 z-[10000]",
-        "top-4 sm:top-16 sm:left-1/2 sm:right-auto sm:-translate-x-1/2",
-        "mx-4 sm:mx-0",
-        "sm:w-auto sm:max-w-md",
+        "fixed left-1/2 -translate-x-1/2 z-[10000]",
+        "top-4 sm:top-16",
+        "w-auto max-w-[280px] sm:max-w-sm",
+        "mx-4",
         "transition-[opacity,transform] duration-300 ease-out",
         show ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2",
       ].join(" ")}
@@ -71,10 +78,12 @@ export function Toast({ message, show, type = "info", onClose }: ToastProps) {
       >
         {type === "success" && <Check className="h-4 w-4 text-green-500 flex-shrink-0" />}
         {type === "error" && <X className="h-4 w-4 text-red-500 flex-shrink-0" />}
-        <p className="text-sm font-medium">{message}</p>
+        <p className="text-xs sm:text-sm font-medium whitespace-nowrap">{message}</p>
       </div>
     </div>
   );
+
+  return createPortal(toastContent, portalRoot);
 }
 
 export function useToast() {
