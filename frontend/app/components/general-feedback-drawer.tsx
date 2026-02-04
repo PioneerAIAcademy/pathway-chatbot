@@ -478,15 +478,37 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
       </Drawer.Root>
 
       {flashMounted && (
-        <div
-          aria-hidden="true"
-          className={[
-            "fixed inset-0 z-[11000] pointer-events-none",
-            "bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.95),rgba(255,255,255,0)_65%)]",
-            "transition-opacity duration-300 ease-out",
-            flashVisible ? "opacity-90" : "opacity-0",
-          ].join(" ")}
-        />
+        <>
+          {/* Outer glow - expands outward */}
+          <div
+            aria-hidden="true"
+            className={[
+              "fixed inset-0 z-[11000] pointer-events-none",
+              "bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.4)_0%,rgba(255,255,255,0.2)_40%,transparent_70%)]",
+              "transition-all duration-500 ease-out",
+              flashVisible ? "opacity-100 scale-100" : "opacity-0 scale-150",
+            ].join(" ")}
+          />
+          {/* Inner flash - bright center */}
+          <div
+            aria-hidden="true"
+            className={[
+              "fixed inset-0 z-[11001] pointer-events-none",
+              "bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.98)_0%,rgba(255,255,255,0.7)_25%,rgba(255,255,255,0.3)_50%,transparent_70%)]",
+              "transition-all duration-200 ease-out",
+              flashVisible ? "opacity-100 scale-100" : "opacity-0 scale-110",
+            ].join(" ")}
+          />
+          {/* Full screen subtle wash */}
+          <div
+            aria-hidden="true"
+            className={[
+              "fixed inset-0 z-[11002] pointer-events-none bg-white",
+              "transition-opacity duration-150 ease-in-out",
+              flashVisible ? "opacity-40" : "opacity-0",
+            ].join(" ")}
+          />
+        </>
       )}
 
       <Toast show={show} message={message} type={type} onClose={hideToast} />
