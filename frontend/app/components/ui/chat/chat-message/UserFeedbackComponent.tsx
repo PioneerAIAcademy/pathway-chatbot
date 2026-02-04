@@ -14,7 +14,7 @@ const BUTTON_REVEAL_MS = 520;
 const FOCUS_MS = 600;
 const CLOSE_ANIMATION_MS = 240;
 const MAX_COMMENT_LENGTH = 300;
-const MOBILE_POPOVER_MARGIN_PX = 16;
+const MOBILE_POPOVER_RIGHT_MARGIN_PX = 24;
 
 export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
     const { backend = "" } = useClientConfig();
@@ -103,11 +103,11 @@ export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
             // Mobile: anchor at thumbs-down, but align the popover's left edge with the action
             // row (copy icon). To avoid horizontal scrolling, constrain the popover width so it
             // can fit to the right of that aligned start point.
-            const desiredLeft = Math.max(rowRect.left, MOBILE_POPOVER_MARGIN_PX);
+            const desiredLeft = rowRect.left;
             const offset = desiredLeft - anchorRect.left;
             setMobilePopoverOffsetX(Math.round(offset));
 
-            const maxWidth = Math.floor(window.innerWidth - desiredLeft - MOBILE_POPOVER_MARGIN_PX);
+            const maxWidth = Math.floor(window.innerWidth - desiredLeft - MOBILE_POPOVER_RIGHT_MARGIN_PX);
             setMobilePopoverMaxWidthPx(maxWidth > 0 ? maxWidth : null);
         };
 
@@ -179,10 +179,10 @@ export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
             if (anchor && actionsRow) {
                 const rowRect = actionsRow.getBoundingClientRect();
                 const anchorRect = anchor.getBoundingClientRect();
-                const desiredLeft = Math.max(rowRect.left, MOBILE_POPOVER_MARGIN_PX);
+                const desiredLeft = rowRect.left;
                 setMobilePopoverOffsetX(Math.round(desiredLeft - anchorRect.left));
 
-                const maxWidth = Math.floor(window.innerWidth - desiredLeft - MOBILE_POPOVER_MARGIN_PX);
+                const maxWidth = Math.floor(window.innerWidth - desiredLeft - MOBILE_POPOVER_RIGHT_MARGIN_PX);
                 setMobilePopoverMaxWidthPx(maxWidth > 0 ? maxWidth : null);
             } else {
                 setMobilePopoverOffsetX(0);
