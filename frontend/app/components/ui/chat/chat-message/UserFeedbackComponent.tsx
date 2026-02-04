@@ -14,7 +14,7 @@ const BUTTON_REVEAL_MS = 520;
 const FOCUS_MS = 600;
 const CLOSE_ANIMATION_MS = 240;
 const MAX_COMMENT_LENGTH = 300;
-const MOBILE_POPOVER_RIGHT_MARGIN_PX = 24;
+const MOBILE_POPOVER_MARGIN_PX = 16;
 
 export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
     const { backend = "" } = useClientConfig();
@@ -103,11 +103,11 @@ export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
             // Mobile: anchor at thumbs-down, but align the popover's left edge with the action
             // row (copy icon). To avoid horizontal scrolling, constrain the popover width so it
             // can fit to the right of that aligned start point.
-            const desiredLeft = rowRect.left;
+            const desiredLeft = Math.max(rowRect.left, MOBILE_POPOVER_MARGIN_PX);
             const offset = desiredLeft - anchorRect.left;
             setMobilePopoverOffsetX(Math.round(offset));
 
-            const maxWidth = Math.floor(window.innerWidth - desiredLeft - MOBILE_POPOVER_RIGHT_MARGIN_PX);
+            const maxWidth = Math.floor(window.innerWidth - desiredLeft - MOBILE_POPOVER_MARGIN_PX);
             setMobilePopoverMaxWidthPx(maxWidth > 0 ? maxWidth : null);
         };
 
@@ -179,10 +179,10 @@ export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
             if (anchor && actionsRow) {
                 const rowRect = actionsRow.getBoundingClientRect();
                 const anchorRect = anchor.getBoundingClientRect();
-                const desiredLeft = rowRect.left;
+                const desiredLeft = Math.max(rowRect.left, MOBILE_POPOVER_MARGIN_PX);
                 setMobilePopoverOffsetX(Math.round(desiredLeft - anchorRect.left));
 
-                const maxWidth = Math.floor(window.innerWidth - desiredLeft - MOBILE_POPOVER_RIGHT_MARGIN_PX);
+                const maxWidth = Math.floor(window.innerWidth - desiredLeft - MOBILE_POPOVER_MARGIN_PX);
                 setMobilePopoverMaxWidthPx(maxWidth > 0 ? maxWidth : null);
             } else {
                 setMobilePopoverOffsetX(0);
@@ -282,14 +282,14 @@ export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
                         <div
                             className="absolute top-8 left-0 z-10"
                             style={{
-                                transform: mobilePopoverOffsetX ? `translateX(${mobilePopoverOffsetX}px)` : undefined,
+                                transform: mobilePopoverOffsetX !== 0 ? `translateX(${mobilePopoverOffsetX}px)` : undefined,
                             }}
                         >
                             <div
                                 ref={popoverRef}
                                 className={cn(
                                     styles.popover,
-                                    "w-[clamp(18rem,65vw,44rem)] max-w-[calc(100vw-2.5rem)]",
+                                    "w-[clamp(16rem,65vw,44rem)] sm:w-[clamp(18rem,65vw,44rem)]",
                                 )}
                                 style={mobilePopoverMaxWidthPx ? { maxWidth: `${mobilePopoverMaxWidthPx}px` } : undefined}
                                 data-state={isClosing ? "closing" : "open"}

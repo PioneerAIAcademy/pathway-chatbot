@@ -439,7 +439,25 @@ async def chat_request(
 @r.post("/thumbs_request")
 async def thumbs_request(request: ThumbsRequest):
     trace_id = request.trace_id
-    value = request.value
+    # Normalize values for comparison, but keep a canonical "Good"/"Bad" for display consistency.
+    value_raw = (request.value or "").strip()
+    value_norm = value_raw.lower()
+    if value_norm == "good":
+        value = "Good"
+    elif value_norm == "bad":
+        value = "Bad"
+    elif value_norm == "":
+        value = ""
+    else:
+        value = value_raw
+
+    # IMPORTANT:
+    # Langfuse "score" updates are upserts by `id`. If we don't explicitly send a new `comment`,
+    # the previous comment can remain attached to the score. When users switch from BAD -> GOOD
+    # (or clear their rating), we should clear any previously submitted comment.
+    comment = request.comment or ""
+    if value_norm != "bad":
+        comment = ""
     score_id = f'{trace_id}_feedback'
 
     # Record the user feedback score
@@ -449,10 +467,11 @@ async def thumbs_request(request: ThumbsRequest):
         name="user_feedback",
         data_type="CATEGORICAL",
         value=value,
+        comment=comment,
     )
 
     # If feedback is negative (thumbs down), update trace with DEBUG level
-    if value == "bad":
+    if value_norm == "bad":
         try:
             # Fetch the trace and update its level to DEBUG for negative feedback
             trace = langfuse.get_trace(trace_id)
