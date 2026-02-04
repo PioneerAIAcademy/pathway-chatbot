@@ -16,6 +16,8 @@ type GeneralFeedbackDrawerProps = {
 
 const MAX_FEEDBACK_LENGTH = 1000;
 const MAX_SCREENSHOT_BYTES = 6 * 1024 * 1024; // 6MB
+const SCREENSHOT_MAX_WIDTH = 1600;
+const FLASH_EXIT_MS = 240;
 
 export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawerProps) {
   const { backend = "" } = useClientConfig();
@@ -23,9 +25,12 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
 
   const [feedback, setFeedback] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCapturing, setIsCapturing] = useState(false);
   const [deviceId, setDeviceId] = useState("");
   const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [flashMounted, setFlashMounted] = useState(false);
+  const [flashVisible, setFlashVisible] = useState(false);
 
   useEffect(() => {
     getDeviceId().then(setDeviceId);
@@ -46,6 +51,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
     setFeedback("");
     setScreenshotFile(null);
     setIsSubmitting(false);
+    setIsCapturing(false);
   };
 
   const handleClose = () => {
@@ -68,6 +74,126 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
       return;
     }
     setScreenshotFile(file);
+  };
+
+  const triggerFlash = () => {
+    setFlashMounted(true);
+    requestAnimationFrame(() => setFlashVisible(true));
+    window.setTimeout(() => setFlashVisible(false), 70);
+    window.setTimeout(() => setFlashMounted(false), FLASH_EXIT_MS);
+  };
+
+  const captureTabScreenshot = async () => {
+    if (isCapturing || isSubmitting) return;
+
+    const getDisplayMedia = navigator.mediaDevices?.getDisplayMedia as
+      | undefined
+      | ((constraints?: unknown) => Promise<MediaStream>);
+
+    if (!getDisplayMedia) {
+      showToast("Screenshot capture isn't supported here. Please upload an image instead.");
+      pickScreenshot();
+      return;
+    }
+
+    setIsCapturing(true);
+    try {
+      // Browsers will still show a picker; we can only *prefer* the current tab.
+      showToast("Select “This tab” to capture a screenshot.");
+
+      const stream = await getDisplayMedia({
+        video: {
+          cursor: "never",
+          frameRate: { ideal: 30, max: 30 },
+        },
+        audio: false,
+        preferCurrentTab: true,
+        selfBrowserSurface: "include",
+        surfaceSwitching: "exclude",
+        systemAudio: "exclude",
+      } as any);
+
+      const videoTrack = stream.getVideoTracks?.()[0];
+      if (!videoTrack) {
+        throw new Error("No video track");
+      }
+
+      const video = document.createElement("video");
+      video.srcObject = stream;
+      video.muted = true;
+      video.playsInline = true;
+
+      try {
+        await video.play();
+      } catch {
+        // Some browsers require a short delay before play() succeeds.
+        await new Promise((r) => setTimeout(r, 120));
+        await video.play();
+      }
+
+      await new Promise<void>((resolve) => {
+        const rvfc = (video as any).requestVideoFrameCallback as undefined | ((cb: () => void) => void);
+        if (typeof rvfc === "function") {
+          rvfc.call(video, () => resolve());
+          return;
+        }
+        setTimeout(() => resolve(), 200);
+      });
+
+      const vw = video.videoWidth || 0;
+      const vh = video.videoHeight || 0;
+      if (!vw || !vh) {
+        throw new Error("Could not read video dimensions");
+      }
+
+      const scale = vw > SCREENSHOT_MAX_WIDTH ? SCREENSHOT_MAX_WIDTH / vw : 1;
+      const cw = Math.max(1, Math.round(vw * scale));
+      const ch = Math.max(1, Math.round(vh * scale));
+
+      const canvas = document.createElement("canvas");
+      canvas.width = cw;
+      canvas.height = ch;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        throw new Error("Could not capture screenshot");
+      }
+      ctx.drawImage(video, 0, 0, cw, ch);
+
+      video.pause();
+      video.srcObject = null;
+      stream.getTracks().forEach((t) => t.stop());
+
+      const toBlob = (quality: number) =>
+        new Promise<Blob>((resolve, reject) => {
+          canvas.toBlob(
+            (b) => (b ? resolve(b) : reject(new Error("toBlob returned null"))),
+            "image/jpeg",
+            quality,
+          );
+        });
+
+      let blob = await toBlob(0.86);
+      if (blob.size > MAX_SCREENSHOT_BYTES) {
+        blob = await toBlob(0.75);
+      }
+      if (blob.size > MAX_SCREENSHOT_BYTES) {
+        showToast("Screenshot is too large. Try resizing the window and capture again.");
+        return;
+      }
+
+      setScreenshotFile(new File([blob], `screenshot-${Date.now()}.jpg`, { type: "image/jpeg" }));
+      triggerFlash();
+    } catch (err: any) {
+      const name = err?.name as string | undefined;
+      if (name === "NotAllowedError") {
+        showToast("Screenshot capture cancelled.");
+      } else {
+        showToast("Could not capture screenshot. Please try again.");
+      }
+    } finally {
+      setIsCapturing(false);
+    }
   };
 
   const handleSubmit = async () => {
@@ -184,11 +310,12 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
                       <Button
                         type="button"
                         variant="outline"
-                        onClick={pickScreenshot}
+                        onClick={captureTabScreenshot}
+                        disabled={isCapturing}
                         className="h-9 px-3 rounded-lg bg-transparent border-white/15 text-white hover:bg-white/10 hover:text-white"
                       >
                         <Camera className="h-4 w-4 mr-2" />
-                        Add screenshot
+                        {isCapturing ? "Capturing..." : "Capture screenshot"}
                       </Button>
                     </div>
                   </div>
@@ -244,8 +371,18 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
         </Drawer.Portal>
       </Drawer.Root>
 
+      {flashMounted && (
+        <div
+          aria-hidden="true"
+          className={[
+            "fixed inset-0 z-[9999] pointer-events-none bg-white",
+            "transition-opacity duration-200 ease-out",
+            flashVisible ? "opacity-60" : "opacity-0",
+          ].join(" ")}
+        />
+      )}
+
       <Toast show={show} message={message} onClose={hideToast} />
     </>
   );
 }
-
