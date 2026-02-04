@@ -414,7 +414,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
                     <button
                       type="button"
                       onClick={pickScreenshot}
-                      className="text-xs text-[#FFC328] hover:text-[#FFD155] underline underline-offset-4"
+                      className="text-xs text-[#B77900] hover:text-[#9A5F00] dark:text-[#FFC328] dark:hover:text-[#FFD155] underline underline-offset-4"
                     >
                       Upload instead
                     </button>
