@@ -1,10 +1,13 @@
 import logging
-from typing import Tuple, List, Dict, Any
+import hashlib
+import time
+from typing import Tuple, List, Dict, Any, Optional
 from collections import defaultdict
 import traceback
 import sys
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile, status
 from llama_index.core.chat_engine.types import BaseChatEngine, NodeWithScore
 from llama_index.core.llms import MessageRole
 
@@ -22,6 +25,7 @@ from app.engine.query_filter import generate_filters
 from app.security import InputValidator, SecurityValidationError, RiskLevel
 from app.utils.localization import LocalizationManager
 from langfuse.decorators import langfuse_context, observe
+from app.http_client import get_http_client
 from app.langfuse import langfuse
 from app.utils.geo_ip import get_geo_data
 import os
@@ -461,6 +465,144 @@ async def thumbs_request(request: ThumbsRequest):
             logger.error(f"Failed to process negative feedback for trace {trace_id}: {e}")
 
     return {"feedback": value}
+
+
+def _get_cloudinary_config() -> Tuple[str, str, str]:
+    """
+    Read Cloudinary config from either explicit vars or CLOUDINARY_URL.
+    Supports:
+      - CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET
+      - CLOUDINARY_URL=cloudinary://<api_key>:<api_secret>@<cloud_name>
+    """
+    cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME", "").strip()
+    api_key = os.getenv("CLOUDINARY_API_KEY", "").strip()
+    api_secret = os.getenv("CLOUDINARY_API_SECRET", "").strip()
+
+    cloudinary_url = os.getenv("CLOUDINARY_URL", "").strip()
+    if cloudinary_url and (not cloud_name or not api_key or not api_secret):
+        parsed = urlparse(cloudinary_url)
+        if parsed.scheme == "cloudinary":
+            cloud_name = cloud_name or (parsed.hostname or "")
+            api_key = api_key or (parsed.username or "")
+            api_secret = api_secret or (parsed.password or "")
+
+    return cloud_name, api_key, api_secret
+
+
+async def _upload_screenshot_to_cloudinary(file: UploadFile) -> str:
+    cloud_name, api_key, api_secret = _get_cloudinary_config()
+    if not cloud_name or not api_key or not api_secret:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Screenshot uploads are not configured",
+        )
+
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Screenshot must be an image file",
+        )
+
+    # Read bytes once (we need them both for size validation and upload).
+    content = await file.read()
+    max_bytes = 6 * 1024 * 1024  # 6MB
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Screenshot too large (max 6MB)",
+        )
+
+    folder = "missionary-assistant/feedback"
+    timestamp = int(time.time())
+
+    # Cloudinary signature: sha1(sorted_params + api_secret)
+    params = {"folder": folder, "timestamp": timestamp}
+    signature_base = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    signature = hashlib.sha1((signature_base + api_secret).encode("utf-8")).hexdigest()
+
+    url = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
+    data = {
+        "api_key": api_key,
+        "timestamp": str(timestamp),
+        "signature": signature,
+        "folder": folder,
+    }
+    files = {
+        "file": (
+            file.filename or "screenshot",
+            content,
+            file.content_type or "application/octet-stream",
+        )
+    }
+
+    client = get_http_client()
+    resp = await client.post(url, data=data, files=files)
+    if resp.status_code >= 400:
+        logger.error(
+            "Cloudinary upload failed (%s): %s",
+            resp.status_code,
+            resp.text[:300],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Screenshot upload failed",
+        )
+
+    payload = resp.json()
+    screenshot_url = payload.get("secure_url") or payload.get("url") or ""
+    if not screenshot_url:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Screenshot upload failed",
+        )
+    return screenshot_url
+
+
+@r.post("/feedback/general")
+async def general_feedback(
+    request: Request,
+    feedback: str = Form(...),
+    screenshot: Optional[UploadFile] = File(None),
+):
+    """
+    General user feedback not tied to a specific chat message.
+    Optionally accepts a screenshot image which is stored in Cloudinary.
+    """
+    feedback_text = (feedback or "").strip()
+    if not feedback_text:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="feedback is required",
+        )
+
+    session_id = request.headers.get("X-Session-ID", request.headers.get("X-Session-Id"))
+    device_id = request.headers.get("X-Device-ID")
+
+    client_ip = request.headers.get("X-Forwarded-For", request.client.host)
+    if "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
+    geo_data = await get_geo_data(client_ip)
+
+    screenshot_url = None
+    if screenshot is not None:
+        screenshot_url = await _upload_screenshot_to_cloudinary(screenshot)
+
+    # Log to Langfuse as a standalone trace for later filtering and review.
+    langfuse.trace(
+        name="general_feedback",
+        session_id=session_id,
+        user_id=device_id,
+        input=feedback_text,
+        tags=["feedback", "general"],
+        metadata={
+            "client_ip": client_ip,
+            "geo_data": geo_data,
+            "screenshot_url": screenshot_url,
+        },
+    )
+
+    return {"status": "success", "message": "Thank you for your feedback!"}
 
 
 def split_header_content(text: str) -> Tuple[str, str]:
