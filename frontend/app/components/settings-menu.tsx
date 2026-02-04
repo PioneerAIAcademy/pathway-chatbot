@@ -73,22 +73,6 @@ export function SettingsMenu() {
             onClick={(e) => e.stopPropagation()}
             onMouseDown={(e) => e.stopPropagation()}
           >
-            {/* Feedback */}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                openFeedback();
-              }}
-              className="w-full flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-[#3D3D3A] dark:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
-            >
-              <MessageSquare className="h-4 w-4 text-[#E18158]" />
-              <span className="font-medium">Feedback</span>
-            </button>
-
-            <div className="my-2 h-px bg-black/10 dark:bg-white/10" />
-
             {/* Theme */}
             <div className="px-2.5 pb-2">
               <h3 className="text-[10px] font-semibold text-[#454540] dark:text-white/90 mb-1.5">
@@ -152,6 +136,22 @@ export function SettingsMenu() {
               <HelpCircle className="h-4 w-4 text-[#646362] dark:text-white/70" />
               <span>Help</span>
             </a>
+
+            <div className="my-2 h-px bg-black/10 dark:bg-white/10" />
+
+            {/* Send feedback */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openFeedback();
+              }}
+              className="w-full flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-[#3D3D3A] dark:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+            >
+              <MessageSquare className="h-4 w-4 text-[#E18158]" />
+              <span className="font-medium">Send feedback</span>
+            </button>
           </div>
         )}
       </div>

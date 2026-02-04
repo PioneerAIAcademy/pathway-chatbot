@@ -1,15 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Check } from "lucide-react";
+import { Check, X } from "lucide-react";
+
+export type ToastType = "info" | "success" | "error";
 
 interface ToastProps {
   message: string;
   show: boolean;
+  type?: ToastType;
   onClose: () => void;
 }
 
-export function Toast({ message, show, onClose }: ToastProps) {
+export function Toast({ message, show, type = "info", onClose }: ToastProps) {
   const [mounted, setMounted] = useState(show);
 
   useEffect(() => {
@@ -37,7 +40,10 @@ export function Toast({ message, show, onClose }: ToastProps) {
   return (
     <div
       className={[
-        "fixed left-1/2 top-16 -translate-x-1/2 z-[10000]",
+        "fixed left-0 right-0 z-[10000]",
+        "top-4 sm:top-16 sm:left-1/2 sm:right-auto sm:-translate-x-1/2",
+        "mx-4 sm:mx-0",
+        "sm:w-auto sm:max-w-md",
         "transition-[opacity,transform] duration-300 ease-out",
         show ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2",
       ].join(" ")}
@@ -45,7 +51,8 @@ export function Toast({ message, show, onClose }: ToastProps) {
       aria-live="polite"
     >
       <div className="flex items-center gap-2 bg-[#242628] border border-white/10 rounded-xl px-4 py-3 shadow-[0_14px_40px_rgba(0,0,0,0.45)]">
-        <Check className="h-4 w-4 text-green-500 flex-shrink-0" />
+        {type === "success" && <Check className="h-4 w-4 text-green-500 flex-shrink-0" />}
+        {type === "error" && <X className="h-4 w-4 text-red-500 flex-shrink-0" />}
         <p className="text-sm text-[#FCFCFC]">{message}</p>
       </div>
     </div>
@@ -55,9 +62,11 @@ export function Toast({ message, show, onClose }: ToastProps) {
 export function useToast() {
   const [show, setShow] = useState(false);
   const [message, setMessage] = useState("");
+  const [type, setType] = useState<ToastType>("info");
 
-  const showToast = (msg: string) => {
+  const showToast = (msg: string, toastType: ToastType = "info") => {
     setMessage(msg);
+    setType(toastType);
     setShow(true);
   };
 
@@ -65,5 +74,5 @@ export function useToast() {
     setShow(false);
   };
 
-  return { show, message, showToast, hideToast };
+  return { show, message, type, showToast, hideToast };
 }

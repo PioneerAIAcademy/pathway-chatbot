@@ -23,7 +23,7 @@ const CAPTURE_READY_TIMEOUT_MS = 2500;
 
 export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawerProps) {
   const { backend = "" } = useClientConfig();
-  const { show, message, showToast, hideToast } = useToast();
+  const { show, message, type, showToast, hideToast } = useToast();
 
   const [feedback, setFeedback] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -34,6 +34,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
   const [flashMounted, setFlashMounted] = useState(false);
   const [flashVisible, setFlashVisible] = useState(false);
   const [justCaptured, setJustCaptured] = useState(false);
+  const [hideForCapture, setHideForCapture] = useState(false);
 
   useEffect(() => {
     getDeviceId().then(setDeviceId);
@@ -70,11 +71,11 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
   const onFileChange = (file: File | null) => {
     if (!file) return;
     if (!file.type.startsWith("image/")) {
-      showToast("Please choose an image file.");
+      showToast("Please choose an image file.", "error");
       return;
     }
     if (file.size > MAX_SCREENSHOT_BYTES) {
-      showToast("That image is too large. Please choose one under 6MB.");
+      showToast("That image is too large. Please choose one under 6MB.", "error");
       return;
     }
     setScreenshotFile(file);
@@ -90,21 +91,24 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
   const captureTabScreenshot = async () => {
     if (isCapturing || isSubmitting) return;
 
-    const getDisplayMedia = navigator.mediaDevices?.getDisplayMedia as
-      | undefined
-      | ((constraints?: unknown) => Promise<MediaStream>);
+    // Check if getDisplayMedia is available
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      showToast("Screenshot capture isn't supported here. Please upload an image instead.", "error");
+      pickScreenshot();
+      return;
+    }
 
     if (typeof window !== "undefined") {
       // getDisplayMedia requires a secure context (HTTPS) except for localhost.
       if (!window.isSecureContext) {
-        showToast("Screen capture requires HTTPS. Please upload an image instead.");
+        showToast("Screen capture requires HTTPS. Please upload an image instead.", "error");
         pickScreenshot();
         return;
       }
 
       // Screen capture is typically blocked from inside iframes.
       if (window.top !== window.self) {
-        showToast("Screen capture isn't available in embedded views. Please upload an image instead.");
+        showToast("Screen capture isn't available in embedded views. Please upload an image instead.", "error");
         pickScreenshot();
         return;
       }
@@ -115,26 +119,26 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
       (document as any)?.permissionsPolicy?.allowsFeature?.("display-capture") ??
       (document as any)?.featurePolicy?.allowsFeature?.("display-capture") ??
       true;
-    if (!allowsDisplayCapture) {
-      showToast("Screen capture is blocked by browser policy. Please upload an image instead.");
-      pickScreenshot();
-      return;
-    }
 
-    if (!getDisplayMedia) {
-      showToast("Screenshot capture isn't supported here. Please upload an image instead.");
+    if (!allowsDisplayCapture) {
+      showToast("Screen capture is blocked by browser policy. Please upload an image instead.", "error");
       pickScreenshot();
       return;
     }
 
     setIsCapturing(true);
-    try {
-      // Browsers will still show a picker; we can only *prefer* the current tab.
-      showToast("Select “This tab” to capture a screenshot.");
 
+    // Hide the drawer before capturing so it doesn't appear in the screenshot
+    setHideForCapture(true);
+
+    // Wait a moment for the drawer to hide
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    try {
       let stream: MediaStream;
       try {
-        stream = await getDisplayMedia({
+        // Call getDisplayMedia directly on navigator.mediaDevices to preserve 'this' context
+        stream = await navigator.mediaDevices.getDisplayMedia({
           video: {
             cursor: "never",
             frameRate: { ideal: 30, max: 30 },
@@ -150,7 +154,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
         if ((err?.name as string | undefined) === "NotAllowedError") {
           throw err;
         }
-        stream = await getDisplayMedia({ video: true, audio: false });
+        stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
       }
 
       const videoTrack = stream.getVideoTracks?.()[0];
@@ -160,7 +164,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
 
       const displaySurface = (videoTrack.getSettings?.() as any)?.displaySurface as string | undefined;
       if (displaySurface && displaySurface !== "browser") {
-        showToast("Tip: choose “This tab” for best results.");
+        showToast("Tip: choose \"This tab\" for best results.", "info");
       }
 
       const video = document.createElement("video");
@@ -231,7 +235,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
         blob = await toBlob(0.75);
       }
       if (blob.size > MAX_SCREENSHOT_BYTES) {
-        showToast("Screenshot is too large. Try resizing the window and capture again.");
+        showToast("Screenshot is too large. Try resizing the window and capture again.", "error");
         return;
       }
 
@@ -239,6 +243,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
       setJustCaptured(true);
       window.setTimeout(() => setJustCaptured(false), 900);
       triggerFlash();
+      showToast("Screenshot captured successfully!", "success");
     } catch (err: any) {
       const name = err?.name as string | undefined;
       const msg = (err?.message as string | undefined) ?? "";
@@ -250,36 +255,38 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
         msgLower.includes("could not perform screen capture") ||
         msgLower.includes("could not start video source")
       ) {
-        showToast("Screen capture is blocked by system permissions. Enable screen recording for your browser and try again.");
+        showToast("Screen capture is blocked by system permissions. Enable screen recording for your browser and try again.", "error");
         return;
       }
 
       if (name === "NotAllowedError" || name === "SecurityError") {
         if (msg.toLowerCase().includes("insecure")) {
-          showToast("Screen capture requires HTTPS. Please upload an image instead.");
+          showToast("Screen capture requires HTTPS. Please upload an image instead.", "error");
           pickScreenshot();
           return;
         }
-        showToast("Screen capture was blocked or cancelled. You can upload an image instead.");
+        showToast("Screen capture was blocked or cancelled.", "info");
         return;
       }
 
       if (name === "NotSupportedError") {
-        showToast("Screen capture isn't supported in this browser. Please upload an image instead.");
+        showToast("Screen capture isn't supported in this browser. Please upload an image instead.", "error");
         pickScreenshot();
         return;
       }
 
-      showToast("Could not capture screenshot. Please try again, or upload an image instead.");
+      showToast("Could not capture screenshot. Please try again, or upload an image instead.", "error");
     } finally {
       setIsCapturing(false);
+      // Show the drawer again after capture
+      setHideForCapture(false);
     }
   };
 
   const handleSubmit = async () => {
     const trimmed = feedback.trim();
     if (!trimmed) {
-      showToast("Please describe your feedback before sending.");
+      showToast("Please describe your feedback before sending.", "error");
       return;
     }
 
@@ -304,10 +311,10 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
         throw new Error("Failed to submit feedback");
       }
 
-      showToast("Thanks for your feedback!");
+      showToast("Thanks for your feedback!", "success");
       handleClose();
     } catch {
-      showToast("Could not send feedback. Please try again.");
+      showToast("Could not send feedback. Please try again.", "error");
     } finally {
       setIsSubmitting(false);
     }
@@ -315,13 +322,13 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
 
   return (
     <>
-      <Drawer.Root open={isOpen} onOpenChange={(open) => !open && handleClose()} direction="right">
+      <Drawer.Root open={isOpen && !hideForCapture} onOpenChange={() => {}} direction="right" modal={false}>
         <Drawer.Portal>
-          <Drawer.Overlay className="fixed inset-0 bg-black/40 z-50" />
+          <Drawer.Overlay className="fixed inset-0 bg-black/40 z-50" onClick={(e) => e.stopPropagation()} />
           <Drawer.Content className="fixed bottom-0 right-0 top-0 z-50 flex outline-none w-full sm:max-w-[460px]">
-            <div className="flex-1 bg-[#111213] text-white shadow-2xl border-l border-white/10">
+            <div className="flex-1 bg-[#111213] text-white shadow-2xl border-l border-white/10 flex flex-col">
               {/* Header */}
-              <div className="px-6 pt-6 pb-5 border-b border-white/10">
+              <div className="px-6 pt-6 pb-5 border-b border-white/10 flex-shrink-0">
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <Drawer.Title className="text-[22px] font-semibold leading-7">
@@ -336,7 +343,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
                     variant="ghost"
                     size="icon"
                     onClick={handleClose}
-                    className="h-8 w-8 rounded-full hover:bg-white/10 text-white"
+                    className="h-8 w-8 rounded-full hover:bg-white/10 text-white flex-shrink-0"
                     title="Close"
                   >
                     <X className="h-4 w-4" />
@@ -345,7 +352,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
               </div>
 
               {/* Body */}
-              <div className="px-6 py-6 flex flex-col gap-6 overflow-y-auto">
+              <div className="px-6 py-6 flex flex-col gap-6 overflow-y-auto flex-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-white/30">
                 <div>
                   <label htmlFor="general-feedback-text" className="block text-sm font-medium text-white/90">
                     Describe your feedback (required)
@@ -416,7 +423,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
                   {screenshotFile && (
                     <div
                       className={[
-                        "mt-4 flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3",
+                        "mt-4 mb-6 flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3",
                         "transition-[box-shadow,transform] duration-300 ease-out",
                         justCaptured ? "ring-2 ring-[#FFC328]/60 shadow-[0_0_0_6px_rgba(255,195,40,0.14)]" : "",
                       ].join(" ")}
@@ -446,7 +453,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
               </div>
 
               {/* Footer */}
-              <div className="px-6 py-5 border-t border-white/10 flex items-center gap-3">
+              <div className="px-6 py-5 border-t border-white/10 flex items-center gap-3 flex-shrink-0">
                 <Button
                   type="button"
                   variant="outline"
@@ -482,7 +489,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
         />
       )}
 
-      <Toast show={show} message={message} onClose={hideToast} />
+      <Toast show={show} message={message} type={type} onClose={hideToast} />
     </>
   );
 }
