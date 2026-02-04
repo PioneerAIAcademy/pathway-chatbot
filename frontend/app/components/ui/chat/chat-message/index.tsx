@@ -115,7 +115,7 @@ function ChatMessageContent({
   ];
 
   return (
-    <div className="flex-1 gap-4 flex flex-col">
+    <div className="flex-1 gap-4 flex flex-col min-w-0 max-w-full">
       {contents
         .sort((a, b) => a.order - b.order)
         .map((content, index) => (
@@ -154,7 +154,12 @@ export default function ChatMessage({
     (annotation) => (annotation as MessageAnnotation)?.trace_id) as MessageAnnotation)?.trace_id || "";
   
   const isUser = chatMessage.role === "user";
-  
+
+  // Check if this is the last assistant message
+  const isLastMessage = messages && messages.length > 0
+    ? messages[messages.length - 1].id === chatMessage.id
+    : false;
+
   const handleEditClick = () => {
     setEditedContent(chatMessage.content);
     setIsEditing(true);
@@ -221,8 +226,8 @@ export default function ChatMessage({
           ) : (
             /* Normal message display - hugs content */
             <>
-              <div className="bg-[#E9E7E1] dark:bg-[#242628] text-[#3D3D3A] dark:text-[#FCFCFC] px-4 sm:px-[17px] py-3 sm:py-[11px] rounded-[24px] rounded-br-[8px] max-w-[90%] sm:max-w-[576px] border border-[rgba(31,30,29,0.12)] dark:border-[rgba(252,252,252,0.06)]">
-                <p className="text-sm sm:text-[15.75px] leading-[24px] sm:leading-[28px] tracking-[-0.1px]">{chatMessage.content}</p>
+              <div className="bg-[#E9E7E1] dark:bg-[#242628] text-[#3D3D3A] dark:text-[#FCFCFC] px-4 sm:px-[17px] py-3 sm:py-[11px] rounded-[24px] rounded-br-[8px] max-w-[90%] sm:max-w-[576px] border border-[rgba(31,30,29,0.12)] dark:border-[rgba(252,252,252,0.06)] overflow-wrap-anywhere">
+                <p className="text-sm sm:text-[15.75px] leading-[24px] sm:leading-[28px] tracking-[-0.1px] break-words overflow-wrap-anywhere">{chatMessage.content}</p>
               </div>
               
               {/* Action buttons for user message - only visible on hover */}
@@ -265,7 +270,7 @@ export default function ChatMessage({
             </div>
 
             {/* Message content */}
-            <div className="flex-1">
+            <div className="flex-1 min-w-0 max-w-full">
               <ChatMessageContent
                 message={chatMessage}
                 isLoading={isLoading}
@@ -288,7 +293,7 @@ export default function ChatMessage({
                       <Copy className="h-4 w-4 text-gray-700 dark:text-[#FCFCFC] hover:text-gray-900 dark:hover:text-white transition-colors" />
                     )}
                   </Button>
-                  <UserFeedbackComponent traceId={traceId}/>
+                  <UserFeedbackComponent traceId={traceId} isLastMessage={isLastMessage} />
                   {showReload && reload && (
                     <Button
                       onClick={reload}

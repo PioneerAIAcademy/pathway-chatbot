@@ -136,7 +136,7 @@ export default function Markdown({
 
   return (
     <MemoizedReactMarkdown
-      className="prose dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 break-words custom-markdown text-[#3D3D3A] dark:text-[#F9F8F6] text-sm sm:text-[15.75px] leading-[24px] sm:leading-[28px] tracking-[-0.1px]"
+      className="prose dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 break-words overflow-wrap-anywhere custom-markdown text-[#3D3D3A] dark:text-[#F9F8F6] text-sm sm:text-[15.75px] leading-[24px] sm:leading-[28px] tracking-[-0.1px] max-w-full"
       remarkPlugins={[remarkGfm, remarkMath]}
       rehypePlugins={[rehypeKatex as any]}
       components={{

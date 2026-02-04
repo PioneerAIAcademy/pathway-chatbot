@@ -7,16 +7,20 @@ import { Toast, useToast } from "../../toast";
 import { cn } from "../../lib/utils";
 import styles from "./UserFeedbackComponent.module.css";
 
-type UserFeedbackComponentProps = { traceId: string };
+type UserFeedbackComponentProps = {
+    traceId: string;
+    isLastMessage?: boolean;
+};
 
 const BORDER_ANIMATION_MS = 680;
 const BUTTON_REVEAL_MS = 520;
 const FOCUS_MS = 600;
 const CLOSE_ANIMATION_MS = 240;
-const MAX_COMMENT_LENGTH = 300;
+const SCROLL_DELAY_MS = 100;
+const MAX_COMMENT_LENGTH = 1000;
 const MOBILE_POPOVER_MARGIN_PX = 16;
 
-export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
+export function UserFeedbackComponent({ traceId, isLastMessage = false }: UserFeedbackComponentProps) {
     const { backend = "" } = useClientConfig();
     const { show, message, showToast, hideToast } = useToast();
 
@@ -197,7 +201,34 @@ export function UserFeedbackComponent({ traceId }: UserFeedbackComponentProps) {
         setIsAnimating(true);
         setShowButtons(false);
         setIsClosing(false);
-        
+
+        // Smooth scroll to show buttons and input (only for last message)
+        if (isLastMessage) {
+            animationTimers.current.push(window.setTimeout(() => {
+                const root = rootRef.current;
+                if (root) {
+                    // Find the scrollable parent container (chat-section's scroll container)
+                    let scrollParent: HTMLElement | null = root.parentElement;
+                    while (scrollParent) {
+                        const overflowY = window.getComputedStyle(scrollParent).overflowY;
+                        if (overflowY === 'auto' || overflowY === 'scroll') {
+                            break;
+                        }
+                        scrollParent = scrollParent.parentElement;
+                    }
+
+                    if (scrollParent) {
+                        // Calculate position to scroll to (120px from top of scroll container)
+                        const rootRect = root.getBoundingClientRect();
+                        const containerRect = scrollParent.getBoundingClientRect();
+                        const scrollOffset = rootRect.top - containerRect.top - 120;
+
+                        scrollParent.scrollBy({ top: scrollOffset, behavior: 'smooth' });
+                    }
+                }
+            }, SCROLL_DELAY_MS));
+        }
+
         // Trigger border animation, then show buttons
         animationTimers.current.push(window.setTimeout(() => {
             setShowButtons(true);

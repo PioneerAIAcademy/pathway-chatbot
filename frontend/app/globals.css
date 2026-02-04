@@ -131,3 +131,12 @@
     background-color: #7a7977;
   }
 }
+
+@layer utilities {
+  /* Ensure long words and URLs break properly to prevent horizontal overflow */
+  .overflow-wrap-anywhere {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    hyphens: auto;
+  }
+}
