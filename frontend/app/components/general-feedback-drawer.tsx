@@ -326,15 +326,15 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
         <Drawer.Portal>
           <Drawer.Overlay className="fixed inset-0 bg-black/40 z-50" onClick={(e) => e.stopPropagation()} />
           <Drawer.Content className="fixed bottom-0 right-0 top-0 z-50 flex outline-none w-full sm:max-w-[460px]">
-            <div className="flex-1 bg-[#111213] text-white shadow-2xl border-l border-white/10 flex flex-col">
+            <div className="flex-1 bg-[#F0EEE6] text-[#3D3D3A] dark:bg-[#111213] dark:text-white shadow-2xl border-l border-black/10 dark:border-white/10 flex flex-col">
               {/* Header */}
-              <div className="px-6 pt-6 pb-5 border-b border-white/10 flex-shrink-0">
+              <div className="px-6 pt-6 pb-5 border-b border-black/10 dark:border-white/10 flex-shrink-0">
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <Drawer.Title className="text-[22px] font-semibold leading-7">
                       Send feedback
                     </Drawer.Title>
-                    <Drawer.Description className="mt-1 text-sm text-white/70">
+                    <Drawer.Description className="mt-1 text-sm text-[#73726C] dark:text-white/70">
                       Help us improve the BYU Pathway Missionary Assistant. Share what happened and what you expected.
                     </Drawer.Description>
                   </div>
@@ -343,7 +343,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
                     variant="ghost"
                     size="icon"
                     onClick={handleClose}
-                    className="h-8 w-8 rounded-full hover:bg-white/10 text-white flex-shrink-0"
+                    className="h-8 w-8 rounded-full hover:bg-black/5 dark:hover:bg-white/10 text-[#3D3D3A] dark:text-white flex-shrink-0"
                     title="Close"
                   >
                     <X className="h-4 w-4" />
@@ -352,9 +352,9 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
               </div>
 
               {/* Body */}
-              <div className="px-6 py-6 flex flex-col gap-6 overflow-y-auto flex-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-white/30">
+              <div className="px-6 py-6 flex flex-col gap-6 overflow-y-auto flex-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-black/20 dark:[&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-black/30 dark:hover:[&::-webkit-scrollbar-thumb]:bg-white/30">
                 <div>
-                  <label htmlFor="general-feedback-text" className="block text-sm font-medium text-white/90">
+                  <label htmlFor="general-feedback-text" className="block text-sm font-medium text-[#3D3D3A] dark:text-white/90">
                     Describe your feedback (required)
                   </label>
                   <div className="mt-2">
@@ -365,24 +365,24 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
                       placeholder="Tell us what prompted this feedback..."
                       maxLength={MAX_FEEDBACK_LENGTH}
                       rows={7}
-                      className="w-full rounded-xl bg-white/5 border border-white/10 px-4 py-3 text-sm leading-6 text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-[#FFC328]/60 focus:border-[#FFC328]/40 resize-none"
+                      className="w-full rounded-xl bg-white border border-black/10 px-4 py-3 text-sm leading-6 text-[#3D3D3A] placeholder:text-[#73726C] focus:outline-none focus:ring-2 focus:ring-[#FFC328]/60 focus:border-[#FFC328]/40 resize-none dark:bg-white/5 dark:border-white/10 dark:text-white dark:placeholder:text-white/40"
                     />
                   </div>
                   <div className="mt-2 flex items-center justify-between gap-4">
-                    <p className="text-xs text-white/55">
+                    <p className="text-xs text-[#73726C] dark:text-white/55">
                       Please don&apos;t include sensitive information.
                     </p>
-                    <p className="text-xs text-white/55 tabular-nums">
+                    <p className="text-xs text-[#73726C] dark:text-white/55 tabular-nums">
                       {feedback.length}/{MAX_FEEDBACK_LENGTH}
                     </p>
                   </div>
                 </div>
 
-                <div className="border-t border-white/10 pt-5">
+                <div className="border-t border-black/10 dark:border-white/10 pt-5">
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <h3 className="text-sm font-medium text-white/90">Screenshot (optional)</h3>
-                      <p className="mt-1 text-xs text-white/55">
+                      <h3 className="text-sm font-medium text-[#3D3D3A] dark:text-white/90">Screenshot (optional)</h3>
+                      <p className="mt-1 text-xs text-[#73726C] dark:text-white/55">
                         A screenshot helps us understand what you were seeing.
                       </p>
                     </div>
@@ -399,7 +399,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
                         variant="outline"
                         onClick={captureTabScreenshot}
                         disabled={isCapturing}
-                        className="h-9 px-3 rounded-lg bg-transparent border-white/15 text-white hover:bg-white/10 hover:text-white"
+                        className="h-9 px-3 rounded-lg bg-transparent border-black/15 text-[#3D3D3A] hover:bg-black/5 hover:text-[#3D3D3A] dark:border-white/15 dark:text-white dark:hover:bg-white/10 dark:hover:text-white"
                       >
                         <Camera className="h-4 w-4 mr-2" />
                         {isCapturing ? "Capturing..." : "Capture screenshot"}
@@ -408,7 +408,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
                   </div>
 
                   <div className="mt-2 flex items-center justify-between gap-3">
-                    <p className="text-xs text-white/55">
+                    <p className="text-xs text-[#73726C] dark:text-white/55">
                       {isCapturing ? "Choose “This tab” in the browser prompt." : "Capture the current tab, or upload an image."}
                     </p>
                     <button
@@ -423,18 +423,18 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
                   {screenshotFile && (
                     <div
                       className={[
-                        "mt-4 mb-6 flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3",
+                        "mt-4 mb-6 flex items-center gap-3 rounded-xl border border-black/10 bg-white p-3 dark:border-white/10 dark:bg-white/5",
                         "transition-[box-shadow,transform] duration-300 ease-out",
                         justCaptured ? "ring-2 ring-[#FFC328]/60 shadow-[0_0_0_6px_rgba(255,195,40,0.14)]" : "",
                       ].join(" ")}
                     >
-                      <div className="h-12 w-12 rounded-lg overflow-hidden bg-black/20 border border-white/10 flex-shrink-0">
+                      <div className="h-12 w-12 rounded-lg overflow-hidden bg-black/5 border border-black/10 dark:bg-black/20 dark:border-white/10 flex-shrink-0">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={screenshotPreviewUrl} alt="Screenshot preview" className="h-full w-full object-cover" />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm text-white/90 truncate">{screenshotFile.name}</p>
-                        <p className="text-xs text-white/55 tabular-nums">
+                        <p className="text-sm text-[#3D3D3A] dark:text-white/90 truncate">{screenshotFile.name}</p>
+                        <p className="text-xs text-[#73726C] dark:text-white/55 tabular-nums">
                           {(screenshotFile.size / (1024 * 1024)).toFixed(1)} MB
                         </p>
                       </div>
@@ -442,7 +442,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
                         type="button"
                         variant="ghost"
                         onClick={() => setScreenshotFile(null)}
-                        className="h-8 px-2 rounded-lg hover:bg-white/10 text-white/80 hover:text-white"
+                        className="h-8 px-2 rounded-lg hover:bg-black/5 text-[#3D3D3A]/80 hover:text-[#3D3D3A] dark:hover:bg-white/10 dark:text-white/80 dark:hover:text-white"
                         title="Remove screenshot"
                       >
                         Remove
@@ -453,13 +453,13 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
               </div>
 
               {/* Footer */}
-              <div className="px-6 py-5 border-t border-white/10 flex items-center gap-3 flex-shrink-0">
+              <div className="px-6 py-5 border-t border-black/10 dark:border-white/10 flex items-center gap-3 flex-shrink-0">
                 <Button
                   type="button"
                   variant="outline"
                   onClick={handleClose}
                   disabled={isSubmitting}
-                  className="flex-1 h-10 rounded-xl bg-transparent border-white/15 text-white hover:bg-white/10 hover:text-white"
+                  className="flex-1 h-10 rounded-xl bg-transparent border-black/15 text-[#3D3D3A] hover:bg-black/5 hover:text-[#3D3D3A] dark:border-white/15 dark:text-white dark:hover:bg-white/10 dark:hover:text-white"
                 >
                   Cancel
                 </Button>
