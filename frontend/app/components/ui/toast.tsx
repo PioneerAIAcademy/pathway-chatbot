@@ -50,10 +50,10 @@ export function Toast({ message, show, type = "info", onClose }: ToastProps) {
       role="status"
       aria-live="polite"
     >
-      <div className="flex items-center gap-2 bg-[#242628] border border-white/10 rounded-xl px-4 py-3 shadow-[0_14px_40px_rgba(0,0,0,0.45)]">
+      <div className="flex items-center gap-2 rounded-xl px-4 py-3 border shadow-[0_14px_40px_rgba(0,0,0,0.12)] bg-[#FFFEFA]/95 backdrop-blur-md border-black/10 text-[#3D3D3A] dark:bg-[#242628] dark:border-white/10 dark:text-[#FCFCFC] dark:shadow-[0_14px_40px_rgba(0,0,0,0.45)]">
         {type === "success" && <Check className="h-4 w-4 text-green-500 flex-shrink-0" />}
         {type === "error" && <X className="h-4 w-4 text-red-500 flex-shrink-0" />}
-        <p className="text-sm text-[#FCFCFC]">{message}</p>
+        <p className="text-sm">{message}</p>
       </div>
     </div>
   );
