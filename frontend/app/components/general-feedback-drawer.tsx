@@ -94,6 +94,33 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
       | undefined
       | ((constraints?: unknown) => Promise<MediaStream>);
 
+    if (typeof window !== "undefined") {
+      // getDisplayMedia requires a secure context (HTTPS) except for localhost.
+      if (!window.isSecureContext) {
+        showToast("Screen capture requires HTTPS. Please upload an image instead.");
+        pickScreenshot();
+        return;
+      }
+
+      // Screen capture is typically blocked from inside iframes.
+      if (window.top !== window.self) {
+        showToast("Screen capture isn't available in embedded views. Please upload an image instead.");
+        pickScreenshot();
+        return;
+      }
+    }
+
+    // Some environments disable capture via Permissions Policy.
+    const allowsDisplayCapture =
+      (document as any)?.permissionsPolicy?.allowsFeature?.("display-capture") ??
+      (document as any)?.featurePolicy?.allowsFeature?.("display-capture") ??
+      true;
+    if (!allowsDisplayCapture) {
+      showToast("Screen capture is blocked by browser policy. Please upload an image instead.");
+      pickScreenshot();
+      return;
+    }
+
     if (!getDisplayMedia) {
       showToast("Screenshot capture isn't supported here. Please upload an image instead.");
       pickScreenshot();
@@ -214,11 +241,26 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
       triggerFlash();
     } catch (err: any) {
       const name = err?.name as string | undefined;
-      if (name === "NotAllowedError") {
-        showToast("Screenshot capture cancelled.");
-      } else {
-        showToast("Could not capture screenshot. Please try again.");
+      const msg = (err?.message as string | undefined) ?? "";
+
+      // Chrome sometimes reports "Could not perform screen capture." in these cases.
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        if (msg.toLowerCase().includes("insecure")) {
+          showToast("Screen capture requires HTTPS. Please upload an image instead.");
+          pickScreenshot();
+          return;
+        }
+        showToast("Screen capture was blocked or cancelled. You can upload an image instead.");
+        return;
       }
+
+      if (name === "NotSupportedError") {
+        showToast("Screen capture isn't supported in this browser. Please upload an image instead.");
+        pickScreenshot();
+        return;
+      }
+
+      showToast("Could not capture screenshot. Please try again, or upload an image instead.");
     } finally {
       setIsCapturing(false);
     }

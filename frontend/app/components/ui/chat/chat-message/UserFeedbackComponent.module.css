@@ -1,0 +1,3 @@
+/* This file is intentionally minimal.
+   Keeping it in place avoids dev-server HMR warnings if a CSS module import is reintroduced. */
+

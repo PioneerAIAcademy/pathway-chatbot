@@ -10,9 +10,13 @@ export function UserFeedbackComponent(props: { traceId: string }) {
     const { show, message, showToast, hideToast } = useToast();
 
     const handleUserFeedback = async (traceId: string, value: FeedbackValue) => {
-        await sendUserFeedback(backend, traceId, value);
-        if (value !== FeedbackValue.EMPTY) {
-            showToast("Thanks for your feedback!");
+        try {
+            await sendUserFeedback(backend, traceId, value);
+            if (value !== FeedbackValue.EMPTY) {
+                showToast("Thanks for your feedback!");
+            }
+        } catch {
+            showToast("Could not send feedback. Please try again.");
         }
     };
 
