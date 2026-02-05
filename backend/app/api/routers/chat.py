@@ -298,6 +298,7 @@ async def chat(
             user_language=user_language,
             skip_suggestions=is_suspicious,
             on_stream_end=_on_stream_end,
+            emit_initial_status=False,
         )
         # return VercelStreamResponse(request, event_handler, response, data, tokens)
     except Exception as e:
