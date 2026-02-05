@@ -10,7 +10,7 @@ import { GeneralFeedbackDrawer } from "./general-feedback-drawer";
 export function SettingsMenu() {
   const [isOpen, setIsOpen] = React.useState(false);
   const [isFeedbackOpen, setIsFeedbackOpen] = React.useState(false);
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, resolvedTheme: currentResolvedTheme } = useTheme();
 
   const hints =
     "https://missionaries.prod.byu-pathway.psdops.com/How-to-use-the-Missionary-Assistant";
@@ -20,7 +20,81 @@ export function SettingsMenu() {
   };
 
   const handleThemeChange = (newTheme: string) => {
+    const prefersReducedMotion =
+      window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+
+    const root = document.documentElement;
+
+    if (theme === newTheme) {
+      setIsOpen(false);
+      return;
+    }
+
+    const resolvedTheme =
+      newTheme === "system"
+        ? window.matchMedia?.("(prefers-color-scheme: dark)")?.matches
+          ? "dark"
+          : "light"
+        : newTheme;
+
+    const isAlreadyInResolvedTheme =
+      currentResolvedTheme === resolvedTheme ||
+      root.classList.contains(resolvedTheme) ||
+      (resolvedTheme === "dark" ? root.classList.contains("dark") : root.classList.contains("light"));
+
+    if (isAlreadyInResolvedTheme) {
+      root.classList.remove("light", "dark", "system");
+      root.classList.add(resolvedTheme);
+      setTheme(newTheme);
+      setIsOpen(false);
+      return;
+    }
+
+    const doc = document as unknown as {
+      startViewTransition?: (
+        updateCallback: () => void | Promise<void>,
+      ) => { finished?: Promise<unknown> };
+    };
+
+    if (!prefersReducedMotion && typeof doc.startViewTransition === "function") {
+      root.classList.add("theme-view-transition");
+      try {
+        const viewTransition = doc.startViewTransition(() => {
+          root.classList.remove("light", "dark", "system");
+          root.classList.add(resolvedTheme);
+          setTheme(newTheme);
+        });
+        viewTransition?.finished?.finally?.(() => {
+          root.classList.remove("theme-view-transition");
+        });
+        setIsOpen(false);
+        return;
+      } catch {
+        root.classList.remove("theme-view-transition");
+      }
+    }
+
+    root.classList.add("theme-color-transition");
+    root.classList.remove("light", "dark", "system");
+    root.classList.add(resolvedTheme);
     setTheme(newTheme);
+
+    const durationMs = (() => {
+      if (prefersReducedMotion) return 0;
+      const raw = getComputedStyle(root).getPropertyValue("--theme-transition-duration").trim();
+      const msMatch = raw.match(/^([0-9.]+)ms$/);
+      if (msMatch) return Number(msMatch[1]);
+      const sMatch = raw.match(/^([0-9.]+)s$/);
+      if (sMatch) return Number(sMatch[1]) * 1000;
+      const numMatch = raw.match(/^([0-9.]+)$/);
+      if (numMatch) return Number(numMatch[1]);
+      return 1200;
+    })();
+
+    window.setTimeout(() => {
+      root.classList.remove("theme-color-transition");
+    }, durationMs + 50);
+
     setIsOpen(false);
   };
 
