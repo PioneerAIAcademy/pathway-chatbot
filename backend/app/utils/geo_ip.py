@@ -34,12 +34,14 @@ async def get_geo_data(ip_address: str) -> dict:
             "city": city,
         }
     except httpx.RequestError as exc:
-        logger.error(f"An error occurred while requesting Geoapify for IP {ip_address}: {exc}")
+        logger.error(f"An error occurred while requesting Geoapify: {exc}")
         return {}
     except httpx.HTTPStatusError as exc:
-        logger.error(f"Geoapify API returned an error for IP {ip_address} - {exc.response.status_code}: {exc.response.text}")
+        logger.error(
+            f"Geoapify API returned an error - {exc.response.status_code}: {exc.response.text}"
+        )
         return {}
     except Exception as exc:
-        logger.error(f"An unexpected error occurred during Geoapify lookup for IP {ip_address}: {exc}")
+        logger.error(f"An unexpected error occurred during Geoapify lookup: {exc}")
         return {}
 

@@ -95,8 +95,7 @@ async def chat(
             logger.warning(
                 f"Security validation blocked suspicious input - "
                 f"Risk: {security_details.get('risk_level', 'UNKNOWN')}, "
-                f"Reason: {security_details.get('reason', 'unknown')}, "
-                f"IP: {client_ip}"
+                f"Reason: {security_details.get('reason', 'unknown')}"
             )
 
             # Update trace with structured fields (trace-level)
@@ -116,7 +115,6 @@ async def chat(
                         "details": security_details
                     },
                     "geo_data": geo_data,
-                    "client_ip": client_ip,
                     "user_language": user_language,
                     "role": role
                 }
@@ -211,7 +209,6 @@ async def chat(
         clean_metadata = {
             "security_validation": security_metadata,
             "geo_data": geo_data,
-            "client_ip": client_ip,
             "user_language": user_language,
             "role": role,
         }
@@ -657,7 +654,6 @@ async def general_feedback(
         input=feedback_text,
         tags=["feedback", "general"],
         metadata={
-            "client_ip": client_ip,
             "geo_data": geo_data,
             "screenshot_url": screenshot_url,
         },
