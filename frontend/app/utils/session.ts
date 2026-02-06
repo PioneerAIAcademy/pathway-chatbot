@@ -6,7 +6,11 @@
 import FingerprintJS from "@fingerprintjs/fingerprintjs";
 
 const SESSION_KEY = "pathway-missionary-assistant-session";
+const SESSION_TS_KEY = "pathway-missionary-assistant-session-ts";
 const DEVICE_KEY = "pathway-missionary-assistant-device";
+
+/** Rotate the session after 30 minutes of inactivity. */
+const SESSION_TTL_MS = 30 * 60 * 1000;
 
 // Initialize FingerprintJS once
 const fpPromise = typeof window !== "undefined" ? FingerprintJS.load() : null;
@@ -34,21 +38,31 @@ export async function getDeviceId(): Promise<string> {
 
 /**
  * Get or create a session ID.
- * - Returns existing session ID from localStorage if available
- * - Creates and stores a new UUID if not
+ * - Returns the existing session ID if it was active within the last 30 minutes.
+ * - Creates and stores a new UUID if none exists or the previous session expired.
+ * - Each call refreshes the activity timestamp so the session stays alive
+ *   as long as the user keeps interacting.
  */
 export function getSessionId(): string {
   if (typeof window === "undefined") {
     return "";
   }
 
-  let sessionId = localStorage.getItem(SESSION_KEY);
+  const now = Date.now();
+  const storedId = localStorage.getItem(SESSION_KEY);
+  const storedTs = localStorage.getItem(SESSION_TS_KEY);
 
-  if (!sessionId) {
-    sessionId = crypto.randomUUID();
-    localStorage.setItem(SESSION_KEY, sessionId);
+  // Reuse the existing session if it's still within the TTL window.
+  if (storedId && storedTs && now - Number(storedTs) < SESSION_TTL_MS) {
+    // Refresh the timestamp on every access (sliding window).
+    localStorage.setItem(SESSION_TS_KEY, String(now));
+    return storedId;
   }
 
+  // Either no session exists or it expired — create a fresh one.
+  const sessionId = crypto.randomUUID();
+  localStorage.setItem(SESSION_KEY, sessionId);
+  localStorage.setItem(SESSION_TS_KEY, String(now));
   return sessionId;
 }
 
@@ -58,6 +72,7 @@ export function getSessionId(): string {
 export function clearSession(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(SESSION_TS_KEY);
 }
 
 /**
