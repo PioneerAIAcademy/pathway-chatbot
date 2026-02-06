@@ -363,7 +363,7 @@ export function UserFeedbackComponent({ traceId, isLastMessage = false }: UserFe
                                             ref={textareaRef}
                                             value={comment}
                                             onChange={(e) => setComment(e.target.value)}
-                                            placeholder="How could this be better? (optional)"
+                                            placeholder="Why did you give this response a thumbs down?"
                                             maxLength={MAX_COMMENT_LENGTH}
                                             rows={2}
                                             className="w-full min-h-[72px] bg-transparent border-none text-[#141413] dark:text-white placeholder:text-[#73726C] dark:placeholder:text-[#B5B5B5] focus-visible:ring-0 focus-visible:ring-offset-0 focus:outline-none text-sm resize-none max-h-[160px] leading-6"
