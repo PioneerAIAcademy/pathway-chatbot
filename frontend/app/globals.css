@@ -46,6 +46,11 @@
     --input-text: 220 3% 8%; /* #141413 Cod Gray - dark text */
     --input-border: 220 3% 88%; /* Light border for input */
     --reference-badge: 20 68% 61%; /* #E18158 */
+
+    /* Theme transition (used by SettingsMenu) */
+    --theme-transition-duration: 1200ms;
+    --theme-transition-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --theme-transition-blur: 18px;
   }
 
   .dark {
@@ -100,6 +105,12 @@
 
   html {
     @apply h-full;
+    color-scheme: light;
+    view-transition-name: root;
+  }
+
+  html.dark {
+    color-scheme: dark;
   }
 
   body {
@@ -129,5 +140,81 @@
   
   textarea::-webkit-scrollbar-thumb:hover {
     background-color: #7a7977;
+  }
+
+  /*
+    Smooth theme transitions for browsers without the View Transitions API.
+    Enabled briefly by toggling the `theme-color-transition` class on `<html>`.
+  */
+  html.theme-color-transition,
+  html.theme-color-transition *,
+  html.theme-color-transition *::before,
+  html.theme-color-transition *::after {
+    transition-property: background-color, border-color, color, fill, stroke, box-shadow;
+    transition-duration: var(--theme-transition-duration);
+    transition-timing-function: var(--theme-transition-ease);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html.theme-color-transition,
+    html.theme-color-transition *,
+    html.theme-color-transition *::before,
+    html.theme-color-transition *::after {
+      transition-duration: 0.01ms;
+    }
+  }
+}
+
+/* Subtle theme crossfade using the View Transitions API. */
+@supports (view-transition-name: root) {
+  html.theme-view-transition::view-transition-old(root),
+  html.theme-view-transition::view-transition-new(root) {
+    animation-duration: var(--theme-transition-duration);
+    animation-timing-function: var(--theme-transition-ease);
+    animation-fill-mode: both;
+    mix-blend-mode: normal;
+  }
+
+  html.theme-view-transition::view-transition-old(root) {
+    animation-name: theme-fade-out;
+    z-index: 1;
+    will-change: opacity, filter;
+  }
+
+  html.theme-view-transition::view-transition-new(root) {
+    animation-name: theme-fade-in;
+    z-index: 2;
+    will-change: opacity, filter;
+  }
+}
+
+@keyframes theme-fade-in {
+  from {
+    opacity: 0;
+    filter: blur(var(--theme-transition-blur)) brightness(1.02) saturate(1.08) sepia(0.08);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0px) brightness(1) saturate(1) sepia(0);
+  }
+}
+
+@keyframes theme-fade-out {
+  from {
+    opacity: 1;
+    filter: blur(0px);
+  }
+  to {
+    opacity: 0;
+    filter: blur(calc(var(--theme-transition-blur) * 0.75));
+  }
+}
+
+@layer utilities {
+  /* Ensure long words and URLs break properly to prevent horizontal overflow */
+  .overflow-wrap-anywhere {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    hyphens: auto;
   }
 }

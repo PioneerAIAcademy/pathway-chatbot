@@ -8,6 +8,7 @@ from llama_index.core.indices.query.schema import QueryBundle
 from llama_index.core.schema import MetadataMode, NodeWithScore
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core.callbacks import CallbackManager, trace_method
+from llama_index.core.callbacks.schema import CBEventType, EventPayload
 from llama_index.core.types import Thread
 
 import voyageai
@@ -116,17 +117,41 @@ class CustomCondensePlusContextChatEngine(CondensePlusContextChatEngine):
         node_texts = list(set(node_texts_ordered))
 
         if rerank and len(node_texts) > 1:
+            callback_manager = getattr(self, "callback_manager", None) or getattr(self, "_callback_manager", None)
+            event_id = None
+            if callback_manager is not None:
+                event_id = callback_manager.on_event_start(
+                    CBEventType.RERANKING,
+                    payload={
+                        EventPayload.QUERY_STR: message,
+                        EventPayload.TOP_K: rerank_k,
+                        EventPayload.MODEL_NAME: rerank_model,
+                    },
+                )
+
             success = False
             retries = 0
+            last_exc: Exception | None = None
             while not success and retries < 3:
                 try:
                     reranking = vo.rerank(message, node_texts, model=rerank_model, top_k=rerank_k)
                     node_texts = [r.document for r in reranking.results if r.relevance_score >= rerank_threshold]
                     # print(f"---\n{node_texts}\n---\n\n")
                     success = True
-                except:
+                except Exception as exc:
+                    last_exc = exc
                     time.sleep(5) # originally 60
                     retries += 1
+
+            if callback_manager is not None:
+                end_payload: dict[str, Any] = {"rerank_success": success}
+                if not success and last_exc is not None:
+                    end_payload[EventPayload.EXCEPTION] = repr(last_exc)
+                callback_manager.on_event_end(
+                    CBEventType.RERANKING,
+                    payload=end_payload,
+                    event_id=event_id or "",
+                )
 
         nodes_ranked = []
         if len(node_texts) == 0:

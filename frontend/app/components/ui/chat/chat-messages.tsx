@@ -1,9 +1,9 @@
-import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "../button";
 import ChatMessage from "./chat-message";
 import { ChatHandler } from "./chat.interface";
+import ChatPendingIndicator from "./chat-pending-indicator";
 import { useClientConfig } from "./hooks/use-config";
 
 export default function ChatMessages(
@@ -75,9 +75,7 @@ export default function ChatMessages(
           );
         })}
         {isPending && (
-          <div className="flex justify-center items-center pt-10">
-            <Loader2 className="h-4 w-4 animate-spin text-[#C2C0B6]" />
-          </div>
+          <ChatPendingIndicator />
         )}
       </div>
       {!messageLength && starterQuestions?.length && props.append && (

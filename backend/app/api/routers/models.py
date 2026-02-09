@@ -239,3 +239,4 @@ class ChatConfig(BaseModel):
 class ThumbsRequest(BaseModel):
     trace_id: str
     value: str
+    comment: Optional[str] = None

@@ -4,12 +4,23 @@ export enum FeedbackValue {
     BAD = 'Bad',
 }
 
-export const sendUserFeedback = async (backend: string, traceId: string, value: FeedbackValue) => {
+export const sendUserFeedback = async (
+    backend: string, 
+    traceId: string, 
+    value: FeedbackValue,
+    comment?: string
+): Promise<boolean> => {
     const uploadAPI = `${backend}/api/chat/thumbs_request`;
     try {
-        const body = {
+        const body: { trace_id: string; value: FeedbackValue; comment?: string } = {
             trace_id: traceId,
             value: value
+        };
+
+        // Include `comment` even if it's an empty string so the backend/Langfuse can clear
+        // a previously submitted comment when users switch from Bad -> Good.
+        if (comment !== undefined) {
+            body.comment = comment;
         }
 
         const response = await fetch(uploadAPI, {
@@ -24,9 +35,11 @@ export const sendUserFeedback = async (backend: string, traceId: string, value: 
             throw new Error("Failed to send feedback");
         }
 
-        const data = await response.json();
-        console.log("Feedback response:", data);
+        // Consume the response body to avoid noisy "unhandled" warnings in some browsers.
+        await response.json().catch(() => null);
+        return true;
     } catch (error) {
-        console.error("Error sending feedback:", error);
+        // Intentionally no console output (this component lives in the user-facing UI).
+        return false;
     }
 };

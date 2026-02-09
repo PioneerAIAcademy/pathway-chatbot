@@ -1,10 +1,13 @@
 import logging
-from typing import Tuple, List, Dict, Any
+import hashlib
+import time
+from typing import Tuple, List, Dict, Any, Optional
 from collections import defaultdict
 import traceback
 import sys
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile, status
 from llama_index.core.chat_engine.types import BaseChatEngine, NodeWithScore
 from llama_index.core.llms import MessageRole
 
@@ -22,8 +25,10 @@ from app.engine.query_filter import generate_filters
 from app.security import InputValidator, SecurityValidationError, RiskLevel
 from app.utils.localization import LocalizationManager
 from langfuse.decorators import langfuse_context, observe
+from app.http_client import get_http_client
 from app.langfuse import langfuse
 from app.utils.geo_ip import get_geo_data
+import os
 
 chat_router = r = APIRouter()
 
@@ -43,7 +48,7 @@ def _log_exception_trace():
 
 # streaming endpoint - delete if not needed
 @r.post("")
-@observe()
+@observe(as_type="generation")
 async def chat(
     request: Request,
     data: ChatData,
@@ -52,6 +57,7 @@ async def chat(
     risk_level = None
     security_details = {}
     chat_engine = None
+    streaming_response_returned = False
 
     try:
         last_message_content = data.get_last_message_content()
@@ -71,29 +77,55 @@ async def chat(
         if blocked_message:
             # Detect user's language for consistent blocked response localization
             user_language = LocalizationManager.detect_language(last_message_content)
-            
+            role = data.data.get("role", "missionary") if data.data else "missionary"
+
+            # Get session ID and device ID from headers
+            session_id = request.headers.get("X-Session-ID", request.headers.get("X-Session-Id"))
+            device_id = request.headers.get("X-Device-ID")
+
+            # Create tags for blocked request
+            blocked_tags = [
+                f"language:{user_language}",
+                f"role:{role}",
+                "feature:chat",
+                f"security:risk_{security_details.get('risk_level', 'UNKNOWN').lower()}"
+            ]
+
             # Log security event for monitoring
             logger.warning(
                 f"Security validation blocked suspicious input - "
                 f"Risk: {security_details.get('risk_level', 'UNKNOWN')}, "
-                f"Reason: {security_details.get('reason', 'unknown')}, "
-                f"IP: {request.client.host if request.client else 'unknown'}"
+                f"Reason: {security_details.get('reason', 'unknown')}"
             )
-            
-            # Send blocked request to Langfuse with security metadata and geo_data
+
+            # Update trace with structured fields (trace-level)
             langfuse_context.update_current_trace(
+                name="chat",
                 input=last_message_content,
                 output=blocked_message,
+                session_id=session_id,
+                user_id=device_id,  # Use device fingerprint as user_id for tracking
+                tags=blocked_tags,
+                release=os.getenv("ENVIRONMENT", "development"),
                 metadata={
-                    "security_blocked": True,
-                    "risk_level": security_details.get("risk_level", "UNKNOWN"),
-                    "security_details": security_details,
-                    "blocked_reason": security_details.get("reason", "security_validation_failed"),
+                    "security_validation": {
+                        "blocked": True,
+                        "risk_level": security_details.get("risk_level", "UNKNOWN"),
+                        "reason": security_details.get("reason", "security_validation_failed"),
+                        "details": security_details
+                    },
+                    "geo_data": geo_data,
                     "user_language": user_language,
-                    **geo_data
+                    "role": role
                 }
             )
-            
+
+            # Update observation with WARNING level
+            langfuse_context.update_current_observation(
+                level="WARNING",
+                status_message=f"Blocked: {security_details.get('reason', 'security_validation_failed')}"
+            )
+
             # Flush Langfuse trace before streaming response to ensure data is captured
             langfuse.flush()
             
@@ -114,10 +146,15 @@ async def chat(
                     yield self.response
             
             blocked_chat_response = BlockedResponse(blocked_message)
-            tokens = [blocked_message]
-            
+
             return VercelStreamResponse(
-                request, EventCallbackHandler(), blocked_chat_response, data, tokens, skip_suggestions=True, user_language=user_language
+                request,
+                EventCallbackHandler(),
+                blocked_chat_response,
+                data,
+                skip_suggestions=True,
+                user_language=user_language,
+                emit_initial_status=False,
             )
         
         # Sanitize allowed input as additional protection
@@ -131,83 +168,159 @@ async def chat(
         params = data.data or {}
         role = params.get("role", "missionary")
         filters = generate_filters(doc_ids, role)
-        logger.info(
-            f"Creating chat engine with filters: {str(filters)}",
-        )
-        chat_engine = get_chat_engine(filters=filters, params=params)
-
-        event_handler = EventCallbackHandler()
-        chat_engine.callback_manager.handlers.append(event_handler)  # type: ignore
-
-        response = await chat_engine.astream_chat(last_message_content, messages)
-
-        retrieved = "\n\n".join(
-            [
-                f"node_id: {idx+1}\n{node.metadata['url']}\n{node.text}"
-                for idx, node in enumerate(response.source_nodes)
-            ]
-        )
-
-        # await response.aprint_response_stream()
-        tokens = []
-        async for token in response.async_response_gen():
-            tokens.append(token)
 
         langfuse_input = (
             f"(ACMs Question): {last_message_content}"
             if role == "ACM"
             else last_message_content
         )
-        
+
         # Detect user's language for consistent frontend localization
         user_language = LocalizationManager.detect_language(last_message_content)
-        
-        # Enhanced metadata with security information
+
+        # Get session ID and device ID from headers
+        session_id = request.headers.get("X-Session-ID", request.headers.get("X-Session-Id"))
+        device_id = request.headers.get("X-Device-ID")
+
+        # Create tags for successful request
+        success_tags = [
+            f"language:{user_language}",
+            f"role:{role}",
+            "feature:chat",
+            "source:rag"
+        ]
+
+        # Add security tag based on validation
+        if is_suspicious:
+            success_tags.append(f"security:risk_{security_details.get('risk_level', 'LOW').lower()}")
+        else:
+            success_tags.append("security:clean")
+
+        # Build security metadata
         security_metadata = {
             "input_validated": True,
-            "input_sanitized": True
+            "is_suspicious": is_suspicious,
+            "risk_level": security_details.get("risk_level", "NONE") if is_suspicious else "NONE"
         }
-        
-        # Only add risk classification for suspicious inputs
         if is_suspicious:
-            security_metadata.update({
-                "is_suspicious": True,
-                "risk_level": security_details.get("risk_level", "LOW"),
-                "security_details": security_details
-            })
-        else:
-            security_metadata["is_suspicious"] = False
-        
-        enhanced_metadata = {
-            "retrieved_docs": retrieved,
+            security_metadata["details"] = security_details
+
+        # Build clean metadata with only custom business data
+        clean_metadata = {
             "security_validation": security_metadata,
+            "geo_data": geo_data,
             "user_language": user_language,
-            **geo_data
+            "role": role,
         }
-        
-        langfuse_context.update_current_trace(
-            input=langfuse_input, 
-            output=response.response, 
-            metadata=enhanced_metadata
-        )
 
         trace_id = langfuse_context.get_current_trace_id()
-        logger.info(f"We got the trace id to be : {trace_id}")
 
+        # Update trace with structured fields (trace-level)
+        langfuse_context.update_current_trace(
+            name="chat",
+            input=langfuse_input,
+            session_id=session_id,
+            user_id=device_id,  # Use device fingerprint as user_id for tracking
+            tags=success_tags,
+            release=os.getenv("ENVIRONMENT", "development"),
+            metadata=clean_metadata
+        )
+
+        # Get model name from params or environment
+        model_name = params.get("model", os.getenv("MODEL", "gpt-4o-mini"))
+
+        # Update observation - tokens/costs are captured by Langfuse callback handler
+        langfuse_context.update_current_observation(
+            model=model_name,
+            level="DEFAULT",
+            status_message="Chat started"
+        )
+
+        event_handler = EventCallbackHandler()
+        retrieval_metadata: dict[str, Any] = {}
+
+        async def _on_stream_end(final_response: str) -> None:
+            # Update trace output after streaming finishes (or client disconnects).
+            try:
+                if retrieval_metadata:
+                    clean_metadata.update(retrieval_metadata)
+                langfuse.trace(id=trace_id).update(
+                    output=final_response,
+                    metadata=clean_metadata,
+                )
+                langfuse.flush()
+            except Exception as langfuse_error:
+                logger.error(f"Failed to update Langfuse trace output: {langfuse_error}")
+
+            # Ensure chat engine memory is cleaned up after the request completes.
+            if chat_engine is not None:
+                try:
+                    chat_engine.reset()
+                    logger.debug("Chat engine memory buffer cleared")
+                except Exception as cleanup_error:
+                    logger.error(f"Failed to reset chat engine: {cleanup_error}")
+
+        async def _get_response() -> Any:
+            nonlocal chat_engine
+            logger.info(
+                f"Creating chat engine with filters: {str(filters)}",
+            )
+            chat_engine = get_chat_engine(filters=filters, params=params)
+            chat_engine.callback_manager.handlers.append(event_handler)  # type: ignore
+
+            response = await chat_engine.astream_chat(last_message_content, messages)
+
+            try:
+                retrieved = "\n\n".join(
+                    [
+                        f"node_id: {idx+1}\n{node.metadata.get('url', '')}\n{node.text}"
+                        for idx, node in enumerate(response.source_nodes)
+                    ]
+                )
+                retrieval_metadata.update(
+                    {
+                        "retrieved_docs": retrieved,
+                        "retrieved_docs_count": len(response.source_nodes),
+                    }
+                )
+            except Exception as retrieval_error:
+                logger.error(f"Failed to build retrieved docs metadata: {retrieval_error}")
+
+            return response
+
+        streaming_response_returned = True
         return VercelStreamResponse(
-            request, event_handler, response, data, tokens, trace_id=trace_id, user_language=user_language, skip_suggestions=is_suspicious
+            request,
+            event_handler,
+            _get_response(),
+            data,
+            trace_id=trace_id,
+            user_language=user_language,
+            skip_suggestions=is_suspicious,
+            on_stream_end=_on_stream_end,
+            emit_initial_status=False,
         )
         # return VercelStreamResponse(request, event_handler, response, data, tokens)
     except Exception as e:
         logger.exception("Error in chat engine", exc_info=True)
         _log_exception_trace()
+
+        # Track exception in Langfuse with ERROR level
+        try:
+            langfuse_context.update_current_observation(
+                level="ERROR",
+                status_message=f"Exception: {type(e).__name__} - {str(e)}"
+            )
+        except Exception as langfuse_error:
+            logger.error(f"Failed to update Langfuse with error: {langfuse_error}")
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error in chat engine: {e}",
         ) from e
     finally:
-        # Ensure chat engine memory is cleaned up after each request
-        if chat_engine is not None:
+        # If we failed before returning a streaming response, clean up immediately.
+        if not streaming_response_returned and chat_engine is not None:
             try:
                 chat_engine.reset()
                 logger.debug("Chat engine memory buffer cleared")
@@ -366,18 +479,188 @@ async def chat_request(
 @r.post("/thumbs_request")
 async def thumbs_request(request: ThumbsRequest):
     trace_id = request.trace_id
-    value = request.value
+    # Normalize values for comparison, but keep a canonical "Good"/"Bad" for display consistency.
+    value_raw = (request.value or "").strip()
+    value_norm = value_raw.lower()
+    if value_norm == "good":
+        value = "Good"
+    elif value_norm == "bad":
+        value = "Bad"
+    elif value_norm == "":
+        value = ""
+    else:
+        value = value_raw
+
+    # IMPORTANT:
+    # Langfuse "score" updates are upserts by `id`. If we don't explicitly send a new `comment`,
+    # the previous comment can remain attached to the score. When users switch from BAD -> GOOD
+    # (or clear their rating), we should clear any previously submitted comment.
+    comment = request.comment or ""
+    if value_norm != "bad":
+        comment = ""
     score_id = f'{trace_id}_feedback'
 
+    # Record the user feedback score
     langfuse.score(
         id=score_id,
         trace_id=trace_id,
         name="user_feedback",
         data_type="CATEGORICAL",
         value=value,
+        comment=comment,
     )
 
+    # If feedback is negative (thumbs down), update trace with DEBUG level
+    if value_norm == "bad":
+        try:
+            # Fetch the trace and update its level to DEBUG for negative feedback
+            trace = langfuse.get_trace(trace_id)
+            if trace:
+                # Note: We can't update past observations directly via API
+                # The DEBUG level should be set at observation creation time
+                # This score will be visible in Langfuse UI for filtering
+                logger.info(f"Negative feedback received for trace {trace_id}")
+        except Exception as e:
+            logger.error(f"Failed to process negative feedback for trace {trace_id}: {e}")
+
     return {"feedback": value}
+
+
+def _get_cloudinary_config() -> Tuple[str, str, str]:
+    """
+    Read Cloudinary config from either explicit vars or CLOUDINARY_URL.
+    Supports:
+      - CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET
+      - CLOUDINARY_URL=cloudinary://<api_key>:<api_secret>@<cloud_name>
+    """
+    cloud_name = os.getenv("CLOUDINARY_CLOUD_NAME", "").strip()
+    api_key = os.getenv("CLOUDINARY_API_KEY", "").strip()
+    api_secret = os.getenv("CLOUDINARY_API_SECRET", "").strip()
+
+    cloudinary_url = os.getenv("CLOUDINARY_URL", "").strip()
+    if cloudinary_url and (not cloud_name or not api_key or not api_secret):
+        parsed = urlparse(cloudinary_url)
+        if parsed.scheme == "cloudinary":
+            cloud_name = cloud_name or (parsed.hostname or "")
+            api_key = api_key or (parsed.username or "")
+            api_secret = api_secret or (parsed.password or "")
+
+    return cloud_name, api_key, api_secret
+
+
+async def _upload_screenshot_to_cloudinary(file: UploadFile) -> str:
+    cloud_name, api_key, api_secret = _get_cloudinary_config()
+    if not cloud_name or not api_key or not api_secret:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Screenshot uploads are not configured",
+        )
+
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Screenshot must be an image file",
+        )
+
+    # Read bytes once (we need them both for size validation and upload).
+    content = await file.read()
+    max_bytes = 6 * 1024 * 1024  # 6MB
+    if len(content) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Screenshot too large (max 6MB)",
+        )
+
+    folder = "missionary-assistant/feedback"
+    timestamp = int(time.time())
+
+    # Cloudinary signature: sha1(sorted_params + api_secret)
+    params = {"folder": folder, "timestamp": timestamp}
+    signature_base = "&".join(f"{k}={params[k]}" for k in sorted(params))
+    signature = hashlib.sha1((signature_base + api_secret).encode("utf-8")).hexdigest()
+
+    url = f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload"
+    data = {
+        "api_key": api_key,
+        "timestamp": str(timestamp),
+        "signature": signature,
+        "folder": folder,
+    }
+    files = {
+        "file": (
+            file.filename or "screenshot",
+            content,
+            file.content_type or "application/octet-stream",
+        )
+    }
+
+    client = get_http_client()
+    resp = await client.post(url, data=data, files=files)
+    if resp.status_code >= 400:
+        logger.error(
+            "Cloudinary upload failed (%s): %s",
+            resp.status_code,
+            resp.text[:300],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Screenshot upload failed",
+        )
+
+    payload = resp.json()
+    screenshot_url = payload.get("secure_url") or payload.get("url") or ""
+    if not screenshot_url:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Screenshot upload failed",
+        )
+    return screenshot_url
+
+
+@r.post("/feedback/general")
+async def general_feedback(
+    request: Request,
+    feedback: str = Form(...),
+    screenshot: Optional[UploadFile] = File(None),
+):
+    """
+    General user feedback not tied to a specific chat message.
+    Optionally accepts a screenshot image which is stored in Cloudinary.
+    """
+    feedback_text = (feedback or "").strip()
+    if not feedback_text:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="feedback is required",
+        )
+
+    session_id = request.headers.get("X-Session-ID", request.headers.get("X-Session-Id"))
+    device_id = request.headers.get("X-Device-ID")
+
+    client_ip = request.headers.get("X-Forwarded-For", request.client.host)
+    if "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+
+    geo_data = await get_geo_data(client_ip)
+
+    screenshot_url = None
+    if screenshot is not None:
+        screenshot_url = await _upload_screenshot_to_cloudinary(screenshot)
+
+    # Log to Langfuse as a standalone trace for later filtering and review.
+    langfuse.trace(
+        name="general_feedback",
+        session_id=session_id,
+        user_id=device_id,
+        input=feedback_text,
+        tags=["feedback", "general"],
+        metadata={
+            "geo_data": geo_data,
+            "screenshot_url": screenshot_url,
+        },
+    )
+
+    return {"status": "success", "message": "Thank you for your feedback!"}
 
 
 def split_header_content(text: str) -> Tuple[str, str]:

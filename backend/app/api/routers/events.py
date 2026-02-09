@@ -6,6 +6,13 @@ from llama_index.core.callbacks.base import BaseCallbackHandler
 from llama_index.core.callbacks.schema import CBEventType
 from llama_index.core.tools.types import ToolOutput
 from pydantic import BaseModel
+from app.api.routers.message_variations import (
+    get_retrieval_start_message,
+    get_query_message,
+    get_synthesize_message,
+    get_reranking_message,
+    get_llm_message,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -15,20 +22,54 @@ class CallbackEvent(BaseModel):
     event_type: CBEventType
     payload: Optional[Dict[str, Any]] = None
     event_id: str = ""
+    phase: str = "start"  # start | end
 
     def get_retrieval_message(self) -> dict | None:
-        if self.payload:
-            nodes = self.payload.get("nodes")
-            if nodes:
-                msg = f"Retrieved {len(nodes)} sources to use as context for the query"
-            else:
-                msg = f"Retrieving context for query: '{self.payload.get('query_str')}'"
-            return {
-                "type": "events",
-                "data": {"title": msg},
-            }
-        else:
+        if self.phase != "start":
             return None
+        # Always show a non-numeric, user-friendly "in progress" message.
+        # Do not surface counts to the user.
+        msg = get_retrieval_start_message()
+        return {
+            "type": "events",
+            "data": {"title": msg},
+        }
+
+    def get_query_message(self) -> dict | None:
+        if self.phase != "start":
+            return None
+        msg = get_query_message()
+        return {
+            "type": "events",
+            "data": {"title": msg},
+        }
+
+    def get_synthesize_message(self) -> dict | None:
+        if self.phase != "start":
+            return None
+        msg = get_synthesize_message()
+        return {
+            "type": "events",
+            "data": {"title": msg},
+        }
+
+    def get_llm_message(self) -> dict | None:
+        if self.phase != "start":
+            return None
+        msg = get_llm_message()
+        return {
+            "type": "events",
+            "data": {"title": msg},
+        }
+
+    def get_reranking_message(self) -> dict | None:
+        if self.phase != "start":
+            return None
+        msg = get_reranking_message()
+        return {
+            "type": "events",
+            "data": {"title": msg},
+        }
 
     def get_tool_message(self) -> dict | None:
         func_call_args = self.payload.get("function_call")
@@ -78,8 +119,16 @@ class CallbackEvent(BaseModel):
     def to_response(self):
         try:
             match self.event_type:
+                case "query":
+                    return self.get_query_message()
                 case "retrieve":
                     return self.get_retrieval_message()
+                case "reranking":
+                    return self.get_reranking_message()
+                case "synthesize":
+                    return self.get_synthesize_message()
+                case "llm":
+                    return self.get_llm_message()
                 case "function_call":
                     return self.get_tool_message()
                 case "agent_step":
@@ -103,7 +152,6 @@ class EventCallbackHandler(BaseCallbackHandler):
             CBEventType.CHUNKING,
             CBEventType.NODE_PARSING,
             CBEventType.EMBEDDING,
-            CBEventType.LLM,
             CBEventType.TEMPLATING,
         ]
         super().__init__(ignored_events, ignored_events)
@@ -116,7 +164,12 @@ class EventCallbackHandler(BaseCallbackHandler):
         event_id: str = "",
         **kwargs: Any,
     ) -> str:
-        event = CallbackEvent(event_id=event_id, event_type=event_type, payload=payload)
+        event = CallbackEvent(
+            event_id=event_id,
+            event_type=event_type,
+            payload=payload,
+            phase="start",
+        )
         if event.to_response() is not None:
             self._aqueue.put_nowait(event)
 
@@ -127,7 +180,12 @@ class EventCallbackHandler(BaseCallbackHandler):
         event_id: str = "",
         **kwargs: Any,
     ) -> None:
-        event = CallbackEvent(event_id=event_id, event_type=event_type, payload=payload)
+        event = CallbackEvent(
+            event_id=event_id,
+            event_type=event_type,
+            payload=payload,
+            phase="end",
+        )
         if event.to_response() is not None:
             self._aqueue.put_nowait(event)
 
