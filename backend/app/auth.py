@@ -28,6 +28,6 @@ async def verify_api_key(api_key: str = Security(API_KEY_HEADER)) -> str:
     if not api_key or api_key not in valid_keys:
         raise HTTPException(
             status_code=401,
-            detail="Invalid or missing API key. Provide a valid key in the X-API-Key header."
+            detail="Unauthorized."
         )
     return api_key

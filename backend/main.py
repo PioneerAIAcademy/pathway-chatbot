@@ -21,6 +21,20 @@ from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from starlette.middleware.base import BaseHTTPMiddleware
+
+MAX_REQUEST_BODY_SIZE = 1 * 1024 * 1024  # 1MB
+
+
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > MAX_REQUEST_BODY_SIZE:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "Request body too large. Maximum size is 1MB."},
+            )
+        return await call_next(request)
 
 app = FastAPI()
 
@@ -28,6 +42,9 @@ app = FastAPI()
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Reject requests larger than 1MB
+app.add_middleware(RequestSizeLimitMiddleware)
 
 init_settings()
 init_observability()
