@@ -322,9 +322,10 @@ async def chat(
         except Exception as langfuse_error:
             logger.error(f"Failed to update Langfuse with error: {langfuse_error}")
 
+        is_dev = os.getenv("ENVIRONMENT", "dev") == "dev"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in chat engine: {e}",
+            detail=f"Error in chat engine: {e}" if is_dev else "An error occurred. Please try again.",
         ) from e
     finally:
         # If we failed before returning a streaming response, clean up immediately.
@@ -480,9 +481,10 @@ async def chat_request(
     except Exception as e:
         logger.exception("Error in chat_request", exc_info=True)
         _log_exception_trace()
+        is_dev = os.getenv("ENVIRONMENT", "dev") == "dev"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in chat engine: {e}",
+            detail=f"Error in chat engine: {e}" if is_dev else "An error occurred. Please try again.",
         ) from e
 
 
