@@ -7,11 +7,12 @@ import traceback
 import sys
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, Security, UploadFile, status
 from llama_index.core.chat_engine.types import BaseChatEngine, NodeWithScore
 from llama_index.core.llms import MessageRole
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from app.auth import verify_api_key
 
 from app.api.routers.events import EventCallbackHandler
 from app.api.routers.models import (
@@ -59,6 +60,7 @@ async def chat(
     request: Request,
     data: ChatData,
     background_tasks: BackgroundTasks,
+    api_key: str = Depends(verify_api_key),
 ):
     risk_level = None
     security_details = {}
@@ -341,6 +343,7 @@ async def chat(
 async def chat_request(
     request: Request,
     data: ChatData,
+    api_key: str = Depends(verify_api_key),
 ) -> Result:
     risk_level = None
     security_details = {}
@@ -485,7 +488,11 @@ async def chat_request(
 
 @r.post("/thumbs_request")
 @limiter.limit("30/minute")
-async def thumbs_request(request: Request, thumbs_data: ThumbsRequest):
+async def thumbs_request(
+    request: Request,
+    thumbs_data: ThumbsRequest,
+    api_key: str = Depends(verify_api_key),
+):
     trace_id = thumbs_data.trace_id
     # Normalize values for comparison, but keep a canonical "Good"/"Bad" for display consistency.
     value_raw = (thumbs_data.value or "").strip()
@@ -631,6 +638,7 @@ async def general_feedback(
     request: Request,
     feedback: str = Form(...),
     screenshot: Optional[UploadFile] = File(None),
+    api_key: str = Depends(verify_api_key),
 ):
     """
     General user feedback not tied to a specific chat message.

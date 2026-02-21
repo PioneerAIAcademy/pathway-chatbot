@@ -39,11 +39,16 @@ export default function ChatSection() {
       "Content-Type": "application/json",
       "X-Session-ID": getSessionId(),
       "X-Device-ID": deviceId,
+      "X-API-Key": process.env.NEXT_PUBLIC_API_KEY ?? "",
     },
     onError: (error: unknown) => {
       if (!(error instanceof Error)) throw error;
-      const message = JSON.parse(error.message);
-      alert(message.detail);
+      try {
+        const message = JSON.parse(error.message);
+        alert(message.detail ?? error.message);
+      } catch {
+        alert(error.message);
+      }
     },
   });
 

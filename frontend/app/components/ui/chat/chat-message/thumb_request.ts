@@ -27,6 +27,7 @@ export const sendUserFeedback = async (
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
+                "X-API-Key": process.env.NEXT_PUBLIC_API_KEY ?? "",
             },
             body: JSON.stringify(body),
         });
