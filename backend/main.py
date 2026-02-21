@@ -23,17 +23,27 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
-MAX_REQUEST_BODY_SIZE = 1 * 1024 * 1024  # 1MB
+CHAT_MAX_BODY_SIZE = 10 * 1024          # 10KB for chat messages
+FEEDBACK_MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB for feedback screenshots
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > MAX_REQUEST_BODY_SIZE:
-            return JSONResponse(
-                status_code=413,
-                content={"detail": "Request body too large. Maximum size is 1MB."},
-            )
+        if content_length:
+            size = int(content_length)
+            path = request.url.path
+            if path.startswith("/api/chat/feedback"):
+                limit = FEEDBACK_MAX_BODY_SIZE
+                label = "10MB"
+            else:
+                limit = CHAT_MAX_BODY_SIZE
+                label = "10KB"
+            if size > limit:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": f"Request body too large. Maximum size is {label}."},
+                )
         return await call_next(request)
 
 app = FastAPI()
@@ -43,7 +53,7 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Reject requests larger than 1MB
+# Enforce size limits: 10KB for chat, 10MB for feedback/screenshots
 app.add_middleware(RequestSizeLimitMiddleware)
 
 init_settings()
@@ -67,7 +77,7 @@ if environment == "dev":
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -81,10 +91,11 @@ else:
     allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
     if not allowed_origins:
         logger.error("ALLOWED_ORIGINS is not set in production! CORS will block all frontend requests.")
+    logger.info(f"Production CORS allowed origins: {allowed_origins}")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Content-Type", "X-API-Key", "X-Session-ID", "X-Device-ID"],
     )

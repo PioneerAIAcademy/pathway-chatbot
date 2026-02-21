@@ -581,11 +581,11 @@ async def _upload_screenshot_to_cloudinary(file: UploadFile) -> str:
 
     # Read bytes once (we need them both for size validation and upload).
     content = await file.read()
-    max_bytes = 6 * 1024 * 1024  # 6MB
+    max_bytes = 10 * 1024 * 1024  # 10MB
     if len(content) > max_bytes:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Screenshot too large (max 6MB)",
+            detail="Screenshot too large (max 10MB)",
         )
 
     folder = "missionary-assistant/feedback"
