@@ -59,6 +59,18 @@ if environment == "dev":
     @app.get("/")
     async def redirect_to_docs():
         return RedirectResponse(url="/docs")
+else:
+    raw_origins = os.getenv("ALLOWED_ORIGINS", "")
+    allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    if not allowed_origins:
+        logger.error("ALLOWED_ORIGINS is not set in production! CORS will block all frontend requests.")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "X-API-Key", "X-Session-ID", "X-Device-ID"],
+    )
 
 
 def mount_static_files(directory, path):
