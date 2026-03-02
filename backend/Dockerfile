@@ -28,12 +28,13 @@ FROM build as release
 COPY . .
 
 # Use gunicorn with UvicornWorker for production (Step 1)
+# 2 workers for memory-constrained environments (torch + spacy + llama_index are heavy)
 # Worker rotation prevents memory leaks by restarting workers after 500 requests
 CMD [ \
     "gunicorn", \
     "main:app", \
     "-k", "uvicorn.workers.UvicornWorker", \
-    "-w", "1", \
+    "-w", "2", \
     "--max-requests", "500", \
     "--max-requests-jitter", "100", \
     "--timeout", "120", \
