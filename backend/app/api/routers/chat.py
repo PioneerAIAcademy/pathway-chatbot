@@ -7,9 +7,12 @@ import traceback
 import sys
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, Security, UploadFile, status
 from llama_index.core.chat_engine.types import BaseChatEngine, NodeWithScore
 from llama_index.core.llms import MessageRole
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from app.auth import verify_api_key
 
 from app.api.routers.events import EventCallbackHandler
 from app.api.routers.models import (
@@ -34,6 +37,9 @@ chat_router = r = APIRouter()
 
 logger = logging.getLogger("uvicorn")
 
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
+
 
 def _log_exception_trace():
     """
@@ -48,11 +54,13 @@ def _log_exception_trace():
 
 # streaming endpoint - delete if not needed
 @r.post("")
+@limiter.limit("10/minute")
 @observe(as_type="generation")
 async def chat(
     request: Request,
     data: ChatData,
     background_tasks: BackgroundTasks,
+    api_key: str = Depends(verify_api_key),
 ):
     risk_level = None
     security_details = {}
@@ -314,9 +322,10 @@ async def chat(
         except Exception as langfuse_error:
             logger.error(f"Failed to update Langfuse with error: {langfuse_error}")
 
+        is_dev = os.getenv("ENVIRONMENT", "dev") == "dev"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in chat engine: {e}",
+            detail=f"Error in chat engine: {e}" if is_dev else "An error occurred. Please try again.",
         ) from e
     finally:
         # If we failed before returning a streaming response, clean up immediately.
@@ -330,10 +339,12 @@ async def chat(
 
 # non-streaming endpoint - delete if not needed
 @r.post("/request")
+@limiter.limit("10/minute")
 @observe()
 async def chat_request(
     request: Request,
     data: ChatData,
+    api_key: str = Depends(verify_api_key),
 ) -> Result:
     risk_level = None
     security_details = {}
@@ -470,17 +481,23 @@ async def chat_request(
     except Exception as e:
         logger.exception("Error in chat_request", exc_info=True)
         _log_exception_trace()
+        is_dev = os.getenv("ENVIRONMENT", "dev") == "dev"
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error in chat engine: {e}",
+            detail=f"Error in chat engine: {e}" if is_dev else "An error occurred. Please try again.",
         ) from e
 
 
 @r.post("/thumbs_request")
-async def thumbs_request(request: ThumbsRequest):
-    trace_id = request.trace_id
+@limiter.limit("30/minute")
+async def thumbs_request(
+    request: Request,
+    thumbs_data: ThumbsRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    trace_id = thumbs_data.trace_id
     # Normalize values for comparison, but keep a canonical "Good"/"Bad" for display consistency.
-    value_raw = (request.value or "").strip()
+    value_raw = (thumbs_data.value or "").strip()
     value_norm = value_raw.lower()
     if value_norm == "good":
         value = "Good"
@@ -495,7 +512,7 @@ async def thumbs_request(request: ThumbsRequest):
     # Langfuse "score" updates are upserts by `id`. If we don't explicitly send a new `comment`,
     # the previous comment can remain attached to the score. When users switch from BAD -> GOOD
     # (or clear their rating), we should clear any previously submitted comment.
-    comment = request.comment or ""
+    comment = thumbs_data.comment or ""
     if value_norm != "bad":
         comment = ""
     score_id = f'{trace_id}_feedback'
@@ -564,11 +581,11 @@ async def _upload_screenshot_to_cloudinary(file: UploadFile) -> str:
 
     # Read bytes once (we need them both for size validation and upload).
     content = await file.read()
-    max_bytes = 6 * 1024 * 1024  # 6MB
+    max_bytes = 10 * 1024 * 1024  # 10MB
     if len(content) > max_bytes:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Screenshot too large (max 6MB)",
+            detail="Screenshot too large (max 10MB)",
         )
 
     folder = "missionary-assistant/feedback"
@@ -618,10 +635,12 @@ async def _upload_screenshot_to_cloudinary(file: UploadFile) -> str:
 
 
 @r.post("/feedback/general")
+@limiter.limit("5/minute")
 async def general_feedback(
     request: Request,
     feedback: str = Form(...),
     screenshot: Optional[UploadFile] = File(None),
+    api_key: str = Depends(verify_api_key),
 ):
     """
     General user feedback not tied to a specific chat message.

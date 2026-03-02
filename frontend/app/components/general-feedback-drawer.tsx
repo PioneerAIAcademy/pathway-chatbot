@@ -303,6 +303,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
         headers: {
           "X-Session-ID": getSessionId(),
           "X-Device-ID": deviceId,
+          "X-API-Key": process.env.NEXT_PUBLIC_API_KEY ?? "",
         },
         body: form,
       });

@@ -14,12 +14,47 @@ from app.api.routers.chat_config import config_router
 from app.api.routers.upload import file_upload_router
 from app.observability import init_observability
 from app.settings import init_settings
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from starlette.middleware.base import BaseHTTPMiddleware
+
+CHAT_MAX_BODY_SIZE = 10 * 1024          # 10KB for chat messages
+FEEDBACK_MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB for feedback screenshots
+
+
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length:
+            size = int(content_length)
+            path = request.url.path
+            if path.startswith("/api/chat/feedback"):
+                limit = FEEDBACK_MAX_BODY_SIZE
+                label = "10MB"
+            else:
+                limit = CHAT_MAX_BODY_SIZE
+                label = "10KB"
+            if size > limit:
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": f"Request body too large. Maximum size is {label}."},
+                )
+        return await call_next(request)
 
 app = FastAPI()
+
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Enforce size limits: 10KB for chat, 10MB for feedback/screenshots
+app.add_middleware(RequestSizeLimitMiddleware)
 
 init_settings()
 init_observability()
@@ -42,7 +77,7 @@ if environment == "dev":
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -51,6 +86,19 @@ if environment == "dev":
     @app.get("/")
     async def redirect_to_docs():
         return RedirectResponse(url="/docs")
+else:
+    raw_origins = os.getenv("ALLOWED_ORIGINS", "")
+    allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    if not allowed_origins:
+        logger.error("ALLOWED_ORIGINS is not set in production! CORS will block all frontend requests.")
+    logger.info(f"Production CORS allowed origins: {allowed_origins}")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "X-API-Key", "X-Session-ID", "X-Device-ID"],
+    )
 
 
 def mount_static_files(directory, path):
