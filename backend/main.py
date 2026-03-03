@@ -12,6 +12,7 @@ import uvicorn
 from app.api.routers.chat import chat_router
 from app.api.routers.chat_config import config_router
 from app.api.routers.upload import file_upload_router
+from app.api.routers.health import health_router
 from app.observability import init_observability
 from app.settings import init_settings
 from fastapi import FastAPI, Request
@@ -119,6 +120,7 @@ mount_static_files("output", "/api/files/output")
 app.include_router(chat_router, prefix="/api/chat")
 app.include_router(config_router, prefix="/api/chat/config")
 app.include_router(file_upload_router, prefix="/api/chat/upload")
+app.include_router(health_router, prefix="/api")
 
 
 @app.on_event("startup")

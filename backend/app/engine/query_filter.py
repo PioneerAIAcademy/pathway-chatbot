@@ -1,12 +1,29 @@
+from enum import Enum
 from llama_index.core.vector_stores.types import MetadataFilter, MetadataFilters
+
+import logging
+
+logger = logging.getLogger("uvicorn")
+
+
+class UserRole(str, Enum):
+    MISSIONARY = "missionary"
+    ACM = "ACM"
 
 
 def generate_filters(doc_ids, role="missionary"):
     """
     Generate public/private document filters based on the doc_ids and the vector store.
     """
-     # Always require that documents match the selected role (ACM or missionary)
-    role_filter = MetadataFilter(key="role", value=role)
+    # Validate role — reject unknown values and fall back to safe default
+    try:
+        validated_role = UserRole(role)
+    except ValueError:
+        logger.warning(f"Invalid role '{role}' received — defaulting to 'missionary'")
+        validated_role = UserRole.MISSIONARY
+
+    # Always require that documents match the selected role (ACM or missionary)
+    role_filter = MetadataFilter(key="role", value=validated_role.value)
 
     # Define a filter to include only public documents (i.e. where private != true)
     public_doc_filter = MetadataFilter(
