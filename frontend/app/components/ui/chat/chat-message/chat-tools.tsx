@@ -1,7 +1,7 @@
-import { ToolData } from "../index";
+import { CalendarCardData, ToolData } from "../index";
+import { CalendarCard } from "../widgets/CalendarCard";
 import { WeatherCard, WeatherData } from "../widgets/WeatherCard";
 
-// TODO: If needed, add displaying more tool outputs here
 export default function ChatTools({ data }: { data: ToolData }) {
   if (!data) return null;
   const { toolCall, toolOutput } = data;
@@ -20,6 +20,9 @@ export default function ChatTools({ data }: { data: ToolData }) {
     case "get_weather_information":
       const weatherData = toolOutput.output as unknown as WeatherData;
       return <WeatherCard data={weatherData} />;
+    case "get_academic_calendar":
+      const calendarData = toolOutput.output as unknown as CalendarCardData;
+      return <CalendarCard data={calendarData} />;
     default:
       return null;
   }

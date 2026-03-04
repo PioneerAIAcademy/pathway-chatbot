@@ -6,7 +6,7 @@ import DisclaimerMessage from "./disclaimer-message";
 import Greeting from "./greeting";
 import { ChatInput, ChatMessages } from "./ui/chat";
 import { useClientConfig } from "./ui/chat/hooks/use-config";
-import { getSessionId, getDeviceId } from "../utils/session";
+import { getSessionId, getDeviceId, getTimezone } from "../utils/session";
 
 export default function ChatSection() {
   const { backend } = useClientConfig();
@@ -39,6 +39,7 @@ export default function ChatSection() {
       "Content-Type": "application/json",
       "X-Session-ID": getSessionId(),
       "X-Device-ID": deviceId,
+      "X-Timezone": getTimezone(),
       "X-API-Key": process.env.NEXT_PUBLIC_API_KEY ?? "",
     },
     onError: (error: unknown) => {

@@ -1,3 +1,6 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from app.engine.index import get_index
 from app.engine.node_postprocessors import NodeCitationProcessor
 from fastapi import HTTPException
@@ -31,7 +34,11 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
         filters=filters,
     )
     
-    SYSTEM_CITATION_PROMPT = """
+    current_date = datetime.now(ZoneInfo("UTC")).strftime("%B %d, %Y")
+
+    SYSTEM_CITATION_PROMPT = f"""
+    IMPORTANT - Today's date is {current_date}. Use this information when answering questions about dates, deadlines, terms, blocks, semesters, and the academic calendar. Always check if dates are in the past, present, or future relative to today. When the user asks about calendar dates, provide a brief human-friendly intro (e.g., "Here are the key dates for Winter 2026 — Block 2. Today is Day 1 — classes start today.") before any detailed information.
+
     You are a helpful assistant who assists service missionaries with their BYU Pathway questions. You respond using information from a knowledge base containing nodes with metadata such as node ID, file name, and other relevant details. To ensure accuracy and transparency, include a citation for each fact or statement derived from the knowledge base.
 
     Use the following format for citations: [^context number], as the identifier of the data node.
@@ -99,11 +106,13 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
     """
 
     CONTEXT_PROMPT = """
+    Today's date is """ + current_date + """. When answering questions about 'next' or 'current' events, ALWAYS check if dates are in the past, present, or future relative to today.
+
     Answer the question as truthfully as possible using the numbered contexts below. If the answer isn't in the text, please say "Sorry, I'm not able to answer this question. Could you rephrase it?" Please provide a detailed answer. For each sentence in your answer, include a link to the contexts the sentence came from using the format [^context number].
 
     Contexts:
     {context_str}
-    
+
     Instruction: Based on the above documents, provide a detailed answer for the user question below. Ensure that each statement is clearly cited, e.g., 'This is the answer based on the source [^1]. This is part of the answer [^2]...'
     """
     

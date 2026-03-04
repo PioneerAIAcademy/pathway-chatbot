@@ -5,6 +5,8 @@ import { Fragment, useState } from "react";
 import { Button } from "../../button";
 import { useCopyToClipboard } from "../hooks/use-copy-to-clipboard";
 import {
+  CalendarCardData,
+  CalendarCardState,
   ChatHandler,
   DocumentFileData,
   EventData,
@@ -24,6 +26,7 @@ import { ChatImage } from "./chat-image";
 import { ChatSources } from "./chat-sources";
 import { SuggestedQuestions } from "./chat-suggestedQuestions";
 import ChatTools from "./chat-tools";
+import { CalendarCard } from "../widgets/CalendarCard";
 import Markdown from "./markdown";
 import { UserFeedbackComponent } from "./UserFeedbackComponent";
 
@@ -42,6 +45,15 @@ function ChatMessageContent({
   append: Pick<ChatHandler, "append">["append"];
 }) {
   const annotations = message.annotations as MessageAnnotation[] | undefined;
+
+  // DEBUG: log annotation types arriving for calendar diagnosis
+  if (annotations?.length) {
+    const types = annotations.map((a) => (a as any)?.type ?? "unknown");
+    console.log("[ChatMessage] annotation types:", types);
+  } else {
+    console.log("[ChatMessage] no annotations, content:", message.content?.slice(0, 80));
+  }
+
   if (!annotations?.length) return <Markdown content={message.content} />;
 
 
@@ -68,6 +80,80 @@ function ChatMessageContent({
     annotations,
     MessageAnnotationType.SUGGESTED_QUESTIONS,
   );
+  // Legacy full-blob calendar support
+  const calendarData = getAnnotationData<CalendarCardData>(
+    annotations,
+    MessageAnnotationType.CALENDAR,
+  );
+
+  // Progressive calendar patches
+  const calSkeleton = getAnnotationData<{ cardType?: string }>(
+    annotations,
+    MessageAnnotationType.CALENDAR_SKELETON,
+  );
+  const calHeader = getAnnotationData<{
+    title: string;
+    subtitle: string;
+    status: CalendarCardData["status"];
+    type: CalendarCardData["type"];
+  }>(annotations, MessageAnnotationType.CALENDAR_HEADER);
+  const calSpotlight = getAnnotationData<NonNullable<CalendarCardData["spotlight"]>>(
+    annotations,
+    MessageAnnotationType.CALENDAR_SPOTLIGHT,
+  );
+  const calTimeline = getAnnotationData<{
+    events: CalendarCardData["events"];
+    tabs: CalendarCardData["tabs"];
+  }>(annotations, MessageAnnotationType.CALENDAR_TIMELINE);
+  const calFooter = getAnnotationData<{
+    sourceUrl: string;
+    suggestedQuestions: string[];
+    footnote?: string;
+    textFormatOffer?: string;
+  }>(annotations, MessageAnnotationType.CALENDAR_FOOTER);
+
+  // Check for calendar error (pipeline failed/timed out — dismiss skeleton)
+  const calError = getAnnotationData<{ reason: string }>(
+    annotations,
+    MessageAnnotationType.CALENDAR_ERROR,
+  );
+
+  // Assemble progressive state from whatever patches have arrived
+  let calendarState: CalendarCardState | undefined;
+
+  if (calError.length > 0) {
+    // Pipeline failed — don't show skeleton or card
+    calendarState = undefined;
+  } else if (calFooter.length > 0) {
+    calendarState = {
+      phase: "complete",
+      ...calHeader[0],
+      spotlight: calSpotlight[0],
+      ...calTimeline[0],
+      ...calFooter[0],
+    };
+  } else if (calTimeline.length > 0) {
+    calendarState = {
+      phase: "timeline",
+      ...calHeader[0],
+      spotlight: calSpotlight[0],
+      ...calTimeline[0],
+    };
+  } else if (calSpotlight.length > 0) {
+    calendarState = {
+      phase: "spotlight",
+      ...calHeader[0],
+      spotlight: calSpotlight[0],
+    };
+  } else if (calHeader.length > 0) {
+    calendarState = { phase: "header", ...calHeader[0] };
+  } else if (calSkeleton.length > 0) {
+    calendarState = {
+      phase: "skeleton",
+      type: (calSkeleton[0]?.cardType as CalendarCardData["type"]) ?? "block",
+    };
+  }
+
   const userLanguageData = getAnnotationData<UserLanguageData>(
     annotations,
     MessageAnnotationType.USER_LANGUAGE,
@@ -102,6 +188,14 @@ function ChatMessageContent({
     {
       order: 0,
       component: <Markdown content={message.content} sources={sourceData[0]} />,
+    },
+    {
+      order: 0.5,
+      component: calendarData[0] ? (
+        <CalendarCard data={calendarData[0]} append={append} />
+      ) : calendarState ? (
+        <CalendarCard state={calendarState} append={append} />
+      ) : null,
     },
     {
       order: 3,

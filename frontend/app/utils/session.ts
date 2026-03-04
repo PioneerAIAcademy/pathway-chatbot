@@ -82,3 +82,15 @@ export function newSession(): string {
   clearSession();
   return getSessionId();
 }
+
+/**
+ * Get the user's IANA timezone (e.g., "America/New_York").
+ * Used by the backend to compute today-relative calendar dates.
+ */
+export function getTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return "UTC";
+  }
+}

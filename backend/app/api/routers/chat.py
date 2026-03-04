@@ -31,6 +31,15 @@ from langfuse.decorators import langfuse_context, observe
 from app.http_client import get_http_client
 from app.langfuse import langfuse
 from app.utils.geo_ip import get_geo_data
+from app.utils.calendar_router import detect_calendar_intent_via_llm
+from app.utils.calendar_schema import CalendarToolArgs
+from app.utils.calendar_tool import (
+    query_pinecone_for_calendar,
+    extract_structured_data,
+    build_calendar_card,
+    compute_suggestions,
+    _get_today,
+)
 import os
 
 chat_router = r = APIRouter()
@@ -39,6 +48,31 @@ logger = logging.getLogger("uvicorn")
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
+
+
+def _build_calendar_intro(args: CalendarToolArgs) -> str:
+    """Build a short intro sentence for a calendar card (no RAG needed)."""
+    qt = args.query_type.value
+    season = (args.season or "").capitalize()
+    year = args.year
+
+    if qt == "block" and args.block_number:
+        label = f"Block {args.block_number}"
+        if season:
+            label += f" ({season} {year})"
+        return f"Let me pull up the calendar for {label}:"
+    if qt == "semester" and season:
+        return f"Here's the {season} {year} semester at a glance:"
+    if qt == "deadline" and args.specific_deadline:
+        deadline = args.specific_deadline.replace("_", " ")
+        return f"Let me look up the {deadline} deadline for you:"
+    if qt == "deadline" and args.block_number:
+        return f"Here are the deadlines for Block {args.block_number}:"
+    if qt == "graduation":
+        return f"Here's the graduation and commencement info for {year}:"
+    if season:
+        return f"Let me pull up the {season} {year} calendar:"
+    return f"Let me pull up the academic calendar for {year}:"
 
 
 def _log_exception_trace():
@@ -247,6 +281,87 @@ async def chat(
         event_handler = EventCallbackHandler()
         retrieval_metadata: dict[str, Any] = {}
 
+        # Pre-build the Pinecone index once so both the chat engine and
+        # calendar pipeline share the same connection (avoids duplicate connect).
+        from app.engine.index import get_index
+        shared_index = get_index(params)
+
+        # Calendar tool: LLM-based intent detection + Pinecone retrieval pipeline
+        # Intent detection runs FIRST so the chat engine can be told to keep its
+        # text response brief when a visual calendar card will be rendered.
+        user_timezone = request.headers.get("X-Timezone", "UTC")
+        calendar_args = None
+        calendar_clarification = None
+
+        try:
+            calendar_args, calendar_clarification = (
+                await detect_calendar_intent_via_llm(
+                    last_message_content,
+                    user_timezone,
+                    chat_history=messages,
+                )
+            )
+        except Exception as e:
+            logger.error(f"Calendar intent detection failed: {e}")
+
+        if calendar_args is not None:
+            logger.info(
+                f"Calendar intent detected: {calendar_args.query_type.value}, "
+                f"block={calendar_args.block_number}, season={calendar_args.season}"
+            )
+
+        # Build the calendar pipeline that runs concurrently with the chat stream.
+        # Intent detection is already done; this only does retrieval + extraction.
+        async def _calendar_pipeline():
+            """Runs concurrently with the main RAG stream."""
+            if calendar_args is None:
+                logger.warning("Calendar pipeline: calendar_args is None, skipping")
+                return None
+            try:
+                if shared_index is None:
+                    logger.warning("Calendar pipeline: shared_index is None, skipping")
+                    return None
+
+                logger.info("Calendar pipeline: creating retriever...")
+                retriever = shared_index.as_retriever(
+                    similarity_top_k=3, sparse_top_k=15
+                )
+
+                logger.info("Calendar pipeline: querying Pinecone...")
+                nodes = await query_pinecone_for_calendar(calendar_args, retriever)
+                if not nodes:
+                    logger.warning("Calendar pipeline: no Pinecone nodes returned")
+                    return None
+                logger.info(f"Calendar pipeline: got {len(nodes)} nodes")
+
+                logger.info("Calendar pipeline: extracting structured data...")
+                extracted = await extract_structured_data(nodes, calendar_args)
+                if not extracted:
+                    logger.warning("Calendar pipeline: structured extraction failed")
+                    return None
+                logger.info(f"Calendar pipeline: extracted {len(extracted.events)} events")
+
+                today = _get_today(calendar_args.timezone)
+                card = build_calendar_card(extracted, calendar_args, today)
+
+                # Self-verification: build_calendar_card returns None if
+                # the card is garbage (no events, bad title, etc.)
+                if card is None:
+                    logger.warning(
+                        "Calendar pipeline: card failed self-verification — "
+                        "returning None"
+                    )
+                    return None
+
+                card["suggestedQuestions"] = compute_suggestions(
+                    calendar_args, extracted
+                )
+                logger.info("Calendar pipeline: card built & verified successfully")
+                return card
+            except Exception as e:
+                logger.error(f"Calendar pipeline error: {e}", exc_info=True)
+                return None
+
         async def _on_stream_end(final_response: str) -> None:
             # Update trace output after streaming finishes (or client disconnects).
             try:
@@ -268,8 +383,19 @@ async def chat(
                 except Exception as cleanup_error:
                     logger.error(f"Failed to reset chat engine: {cleanup_error}")
 
+        # When calendar intent is detected, skip the RAG engine entirely.
+        # The card shows the data; we just need a short intro sentence.
+        calendar_intro: Optional[str] = None
+        if calendar_args is not None:
+            calendar_intro = _build_calendar_intro(calendar_args)
+
         async def _get_response() -> Any:
             nonlocal chat_engine
+            # Skip RAG when a calendar card will be rendered — the card
+            # already shows all dates/deadlines from Pinecone.
+            if calendar_intro is not None:
+                return None
+
             logger.info(
                 f"Creating chat engine with filters: {str(filters)}",
             )
@@ -304,9 +430,11 @@ async def chat(
             data,
             trace_id=trace_id,
             user_language=user_language,
-            skip_suggestions=is_suspicious,
+            skip_suggestions=is_suspicious or (calendar_args is not None),
             on_stream_end=_on_stream_end,
             emit_initial_status=False,
+            calendar_pipeline=_calendar_pipeline,
+            calendar_intro=calendar_intro,
         )
         # return VercelStreamResponse(request, event_handler, response, data, tokens)
     except Exception as e:

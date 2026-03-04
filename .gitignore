@@ -1,4 +1,5 @@
 .idea/
+.claude/
 
 # Monitoring reports (local only, uploaded to S3)
 backend/monitoring_reports/
