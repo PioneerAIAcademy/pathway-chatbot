@@ -53,13 +53,32 @@ limiter = Limiter(key_func=get_remote_address)
 def _build_calendar_intro(args: CalendarToolArgs) -> str:
     """Build a short intro sentence for a calendar card (no RAG needed)."""
     qt = args.query_type.value
-    season = (args.season or "").capitalize()
+    def _normalize_season(raw: Optional[str]) -> str:
+        value = (raw or "").strip().lower()
+        if value == "summer":
+            return "spring"
+        if value in {"winter", "spring", "fall"}:
+            return value
+        return ""
+
+    def _season_for_block(block_number: Optional[int]) -> str:
+        if block_number in (1, 2):
+            return "winter"
+        if block_number in (3, 4):
+            return "spring"
+        if block_number in (5, 6):
+            return "fall"
+        return ""
+
+    season_raw = _normalize_season(args.season)
+    season = season_raw.capitalize() if season_raw else ""
     year = args.year
 
     if qt == "block" and args.block_number:
         label = f"Block {args.block_number}"
-        if season:
-            label += f" ({season} {year})"
+        canonical = _season_for_block(args.block_number) or season_raw
+        if canonical:
+            label += f" ({canonical.capitalize()} {year})"
         return f"Let me pull up the calendar for {label}:"
     if qt == "semester" and season:
         return f"Here's the {season} {year} semester at a glance:"
@@ -280,6 +299,7 @@ async def chat(
 
         event_handler = EventCallbackHandler()
         retrieval_metadata: dict[str, Any] = {}
+        calendar_metadata: dict[str, Any] = {}
 
         # Pre-build the Pinecone index once so both the chat engine and
         # calendar pipeline share the same connection (avoids duplicate connect).
@@ -309,17 +329,34 @@ async def chat(
                 f"Calendar intent detected: {calendar_args.query_type.value}, "
                 f"block={calendar_args.block_number}, season={calendar_args.season}"
             )
+            calendar_metadata.update(
+                {
+                    "mode": "calendar",
+                    "router_args": {
+                        "query_type": calendar_args.query_type.value,
+                        "year": calendar_args.year,
+                        "season": calendar_args.season,
+                        "block_number": calendar_args.block_number,
+                        "specific_deadline": calendar_args.specific_deadline,
+                        "timezone": calendar_args.timezone,
+                    },
+                    "pipeline_status": "detected",
+                }
+            )
 
         # Build the calendar pipeline that runs concurrently with the chat stream.
         # Intent detection is already done; this only does retrieval + extraction.
         async def _calendar_pipeline():
             """Runs concurrently with the main RAG stream."""
+            nonlocal calendar_metadata
             if calendar_args is None:
                 logger.warning("Calendar pipeline: calendar_args is None, skipping")
+                calendar_metadata["pipeline_status"] = "skipped_no_args"
                 return None
             try:
                 if shared_index is None:
                     logger.warning("Calendar pipeline: shared_index is None, skipping")
+                    calendar_metadata["pipeline_status"] = "skipped_no_index"
                     return None
 
                 logger.info("Calendar pipeline: creating retriever...")
@@ -331,15 +368,35 @@ async def chat(
                 nodes = await query_pinecone_for_calendar(calendar_args, retriever)
                 if not nodes:
                     logger.warning("Calendar pipeline: no Pinecone nodes returned")
+                    calendar_metadata["pipeline_status"] = "no_nodes"
                     return None
                 logger.info(f"Calendar pipeline: got {len(nodes)} nodes")
+                calendar_metadata["retrieved_nodes_count"] = len(nodes)
 
                 logger.info("Calendar pipeline: extracting structured data...")
                 extracted = await extract_structured_data(nodes, calendar_args)
                 if not extracted:
                     logger.warning("Calendar pipeline: structured extraction failed")
+                    calendar_metadata["pipeline_status"] = "extraction_failed"
                     return None
                 logger.info(f"Calendar pipeline: extracted {len(extracted.events)} events")
+
+                calendar_metadata.update(
+                    {
+                        "pipeline_status": "extracted",
+                        "extracted": {
+                            "title": extracted.title,
+                            "subtitle": extracted.subtitle,
+                            "start": extracted.block_or_semester_start,
+                            "end": extracted.block_or_semester_end,
+                            "event_count": len(extracted.events),
+                            "events": [
+                                {"date": evt.date, "name": evt.name}
+                                for evt in extracted.events[:40]
+                            ],
+                        },
+                    }
+                )
 
                 today = _get_today(calendar_args.timezone)
                 card = build_calendar_card(extracted, calendar_args, today)
@@ -351,25 +408,63 @@ async def chat(
                         "Calendar pipeline: card failed self-verification — "
                         "returning None"
                     )
+                    calendar_metadata["pipeline_status"] = "card_verification_failed"
                     return None
 
                 card["suggestedQuestions"] = compute_suggestions(
                     calendar_args, extracted
                 )
+                calendar_metadata.update(
+                    {
+                        "pipeline_status": "success",
+                        "card": {
+                            "title": card.get("title"),
+                            "subtitle": card.get("subtitle"),
+                            "status": card.get("status"),
+                            "type": card.get("type"),
+                            "event_count": len(card.get("events", [])),
+                            "spotlight": card.get("spotlight", {}).get("title")
+                            if card.get("spotlight")
+                            else None,
+                        },
+                    }
+                )
                 logger.info("Calendar pipeline: card built & verified successfully")
                 return card
             except Exception as e:
                 logger.error(f"Calendar pipeline error: {e}", exc_info=True)
+                calendar_metadata.update(
+                    {"pipeline_status": "error", "pipeline_error": str(e)}
+                )
                 return None
 
         async def _on_stream_end(final_response: str) -> None:
             # Update trace output after streaming finishes (or client disconnects).
             try:
+                final_tags = [
+                    tag
+                    for tag in success_tags
+                    if not tag.startswith("source:") and not tag.startswith("calendar:")
+                ]
+
                 if retrieval_metadata:
                     clean_metadata.update(retrieval_metadata)
+
+                if calendar_metadata:
+                    clean_metadata["calendar_pipeline"] = calendar_metadata
+                    final_tags.append("source:calendar")
+                    final_tags.append("calendar:detected")
+                    if calendar_metadata.get("pipeline_status") == "success":
+                        final_tags.append("calendar:success")
+                    else:
+                        final_tags.append("calendar:error")
+                else:
+                    final_tags.append("source:rag")
+
                 langfuse.trace(id=trace_id).update(
                     output=final_response,
                     metadata=clean_metadata,
+                    tags=final_tags,
                 )
                 langfuse.flush()
             except Exception as langfuse_error:

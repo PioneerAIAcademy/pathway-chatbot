@@ -136,10 +136,10 @@ function SpotlightBanner({
       <div
         className={`text-center min-w-[54px] shrink-0 ${colors.dateText}`}
       >
-        <div className="text-[11px] font-semibold uppercase tracking-wide opacity-75">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.5px] opacity-75">
           {monthStr}
         </div>
-        <div className="text-[30px] font-extrabold leading-none -tracking-wider">
+        <div className="text-[30px] font-extrabold leading-none tracking-[-1px]">
           {dayStr}
         </div>
       </div>
@@ -222,7 +222,7 @@ function TimelineRow({
         className={`${styles.rowContentReveal} w-[42px] text-center shrink-0 pt-0.5`}
       >
         <div
-          className={`text-[9px] font-bold uppercase tracking-wide ${isPast ? "text-gray-400 dark:text-gray-600" : "text-gray-500 dark:text-gray-500"}`}
+          className={`text-[9px] font-bold uppercase tracking-[0.5px] ${isPast ? "text-gray-400 dark:text-gray-600" : "text-gray-500 dark:text-gray-500"}`}
         >
           {monthStr}
         </div>
@@ -412,14 +412,14 @@ export function CalendarCard({
         <div className="px-5 pt-4 pb-3 flex items-center justify-between gap-3">
           {headerLoaded ? (
             <div
-              className={`${styles.sectionReveal} flex items-center justify-between gap-3 w-full`}
+              className={`${styles.headerReveal} flex items-center justify-between gap-3 w-full`}
             >
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[hsl(var(--header-bg))] to-amber-500 flex items-center justify-center shadow-[0_4px_12px_rgba(255,195,40,0.18)] shrink-0">
                   <CardIcon type={cardData.type ?? "block"} />
                 </div>
                 <div>
-                  <div className="text-base font-bold tracking-[-0.3px] text-[#3D3D3A] dark:text-[#e6edf3]">
+                  <div className="text-base font-bold leading-[1.15] tracking-[-0.3px] text-[#3D3D3A] dark:text-[#e6edf3]">
                     {cardData.title}
                   </div>
                   <div className="text-xs text-gray-500 dark:text-gray-500 mt-px">

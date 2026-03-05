@@ -101,6 +101,17 @@ def _urgency_for_status(status: str) -> str:
     }.get(status, "info")
 
 
+def _season_for_block(block_number: Optional[int]) -> Optional[str]:
+    """Derive the canonical season name from BYU-Pathway block number."""
+    if block_number in (1, 2):
+        return "winter"
+    if block_number in (3, 4):
+        return "spring"
+    if block_number in (5, 6):
+        return "fall"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Pinecone query
 # ---------------------------------------------------------------------------
@@ -383,9 +394,18 @@ def build_calendar_card(
                 "events": block_events,
             })
 
+    # Normalize title for block queries to avoid incorrect LLM season labels.
+    normalized_title = extracted.title
+    if args.query_type.value == "block" and args.block_number:
+        season = _season_for_block(args.block_number) or args.season
+        if season:
+            normalized_title = (
+                f"{season.capitalize()} {args.year} — Block {args.block_number}"
+            )
+
     card = {
         "type": args.query_type.value,
-        "title": extracted.title,
+        "title": normalized_title,
         "subtitle": extracted.subtitle or "",
         "status": card_status,
         "spotlight": spotlight,

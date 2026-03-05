@@ -120,7 +120,8 @@
       "calt" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    text-rendering: optimizeLegibility;
+    font-synthesis-weight: none;
+    font-synthesis-style: none;
   }
 
   .background-gradient {
