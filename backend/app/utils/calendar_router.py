@@ -9,6 +9,7 @@ with the main chat response. If not, only the normal RAG response streams.
 
 import json
 import logging
+import re
 from datetime import date, datetime
 from typing import List, Optional
 
@@ -23,6 +24,21 @@ logger = logging.getLogger("uvicorn")
 
 # Max history messages to include for follow-up context
 _MAX_HISTORY_MESSAGES = 4
+
+
+def _season_block_for_month(month: int) -> tuple[str, int]:
+    """Map month to BYU-Pathway season and current block."""
+    if month <= 2:
+        return "winter", 1
+    if month <= 4:
+        return "winter", 2
+    if month <= 6:
+        return "spring", 3
+    if month <= 8:
+        return "spring", 4
+    if month <= 10:
+        return "fall", 5
+    return "fall", 6
 
 # Template — {current_context} is filled at call time with date/term info.
 _ROUTER_SYSTEM_PROMPT_TEMPLATE = (
@@ -67,19 +83,7 @@ def _current_term_context(user_timezone: str) -> str:
     # Winter: Block 1 (Jan–Feb), Block 2 (Mar–Apr)
     # Spring: Block 3 (May–Jun), Block 4 (Jul–Aug)
     # Fall:   Block 5 (Sep–Oct), Block 6 (Nov–Dec)
-    month = today.month
-    if month <= 2:
-        season, block = "winter", 1
-    elif month <= 4:
-        season, block = "winter", 2
-    elif month <= 6:
-        season, block = "spring", 3
-    elif month <= 8:
-        season, block = "spring", 4
-    elif month <= 10:
-        season, block = "fall", 5
-    else:
-        season, block = "fall", 6
+    season, block = _season_block_for_month(today.month)
 
     return (
         f"CURRENT DATE CONTEXT: Today is {today.isoformat()} "
@@ -147,6 +151,37 @@ async def detect_calendar_intent_via_llm(
         except Exception as e:
             logger.error(f"Failed to parse calendar tool args: {e}")
             return None, None
+
+    # LLM did not call the tool — deterministic fallback for direct
+    # current-term/block/semester questions to keep card UX reliable.
+    lowered = message.lower()
+    direct_current_term_patterns = [
+        r"\bwhat\s+semester\b",
+        r"\bwhich\s+semester\b",
+        r"\bwhat\s+term\b",
+        r"\bwhich\s+term\b",
+        r"\bwhat\s+block\b",
+        r"\bwhich\s+block\b",
+        r"\bcurrent\s+(semester|term|block)\b",
+        r"\bare\s+we\s+in\b",
+    ]
+    if any(re.search(pattern, lowered) for pattern in direct_current_term_patterns):
+        try:
+            today = datetime.now(ZoneInfo(user_timezone)).date()
+        except Exception:
+            today = datetime.now(ZoneInfo("UTC")).date()
+
+        season, block = _season_block_for_month(today.month)
+        return (
+            CalendarToolArgs(
+                query_type="semester",
+                season=season,
+                year=today.year,
+                block_number=block,
+                timezone=user_timezone,
+            ),
+            None,
+        )
 
     # LLM did not call the tool — check for clarification text
     text_response = getattr(ai_message, "content", "") or ""

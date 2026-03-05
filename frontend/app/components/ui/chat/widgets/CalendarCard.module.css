@@ -8,7 +8,7 @@
 .card {
   position: relative;
   opacity: 0;
-  animation: cardAppear 0.25s ease-out forwards;
+  animation: cardAppear 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -30,25 +30,20 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 1;
+  z-index: 3;
+  border-radius: inherit;
+  overflow: hidden;
 }
 
 .frameLine {
   position: absolute;
   display: block;
-  background: linear-gradient(
-    90deg,
-    rgba(0, 0, 0, 0.05),
-    rgba(0, 0, 0, 0.18)
-  );
+  background: rgba(0, 0, 0, 0.18);
+  will-change: transform;
 }
 
 :global(.dark) .frameLine {
-  background: linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0.1),
-    rgba(255, 255, 255, 0.4)
-  );
+  background: rgba(255, 255, 255, 0.32);
 }
 
 .topLeft,
@@ -108,17 +103,17 @@
 
 .ready .topLeft,
 .ready .topRight {
-  animation: drawHorizontal 0.46s ease-out forwards;
+  animation: drawHorizontal 1.15s cubic-bezier(0.19, 1, 0.22, 1) forwards;
 }
 
 .ready .sideLeft,
 .ready .sideRight {
-  animation: drawVertical 0.35s ease-out 0.46s forwards;
+  animation: drawVertical 0.9s cubic-bezier(0.19, 1, 0.22, 1) 1.15s forwards;
 }
 
 .ready .bottomLeft,
 .ready .bottomRight {
-  animation: drawHorizontal 0.4s ease-out 0.82s forwards;
+  animation: drawHorizontal 1s cubic-bezier(0.19, 1, 0.22, 1) 2s forwards;
 }
 
 @keyframes drawHorizontal {

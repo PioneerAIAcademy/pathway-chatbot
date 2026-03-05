@@ -396,7 +396,7 @@ export function CalendarCard({
     <div className="flex flex-col gap-3">
       {/* The card — never unmounts, content transitions in-place */}
       <div
-        className={`${styles.card} ${mounted ? styles.ready : ""} bg-[#f5f4f0] dark:bg-[#161b22] border border-gray-200/60 dark:border-white/[0.06] rounded-2xl overflow-hidden`}
+        className={`${styles.card} ${mounted ? styles.ready : ""} bg-[#f5f4f0] dark:bg-[#161b22] rounded-2xl overflow-hidden`}
       >
         {/* Card frame — 6 lines draw the border from center outward */}
         <div className={styles.cardFrame} aria-hidden="true">

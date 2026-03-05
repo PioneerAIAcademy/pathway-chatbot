@@ -101,6 +101,23 @@ def _urgency_for_status(status: str) -> str:
     }.get(status, "info")
 
 
+def _urgency_for_delta_days(delta_days: int) -> str:
+    """Best-practice urgency thresholding for spotlight emphasis.
+
+    - urgent: today/tomorrow/within 2 days
+    - warning: within 7 days
+    - info: beyond 7 days
+    - calm: past
+    """
+    if delta_days < 0:
+        return "calm"
+    if delta_days <= 2:
+        return "urgent"
+    if delta_days <= 7:
+        return "warning"
+    return "info"
+
+
 def _season_for_block(block_number: Optional[int]) -> Optional[str]:
     """Derive the canonical season name from BYU-Pathway block number."""
     if block_number in (1, 2):
@@ -309,14 +326,21 @@ def build_calendar_card(
             pass
 
     # Process events with deterministic classification
+    # Always sort by date so spotlight/rows prioritize nearest deadlines.
     events = []
     spotlight = None
 
+    parsed_events: list[tuple[date, ExtractedCalendarEvent]] = []
     for evt in extracted.events:
         try:
             evt_date = date.fromisoformat(evt.date)
         except ValueError:
             continue
+        parsed_events.append((evt_date, evt))
+
+    parsed_events.sort(key=lambda pair: pair[0])
+
+    for evt_date, evt in parsed_events:
 
         status = _classify_date(evt_date, today)
         countdown = _countdown_str(evt_date, today)
@@ -355,14 +379,34 @@ def build_calendar_card(
     if not spotlight:
         for evt_dict in events:
             if evt_dict["status"] in ("soon", "upcoming"):
+                evt_date = date.fromisoformat(evt_dict["date"])
+                delta_days = (evt_date - today).days
                 spotlight = {
-                    "urgency": _urgency_for_status(evt_dict["status"]),
+                    "urgency": _urgency_for_delta_days(delta_days),
                     "date": evt_dict["date"],
                     "title": evt_dict["name"],
                     "description": evt_dict.get("description", ""),
                     "countdown": f"{evt_dict['countdown']} remaining",
                 }
                 break
+
+    # De-duplicate: if spotlight repeats an event in the timeline,
+    # remove that first matching timeline event for cleaner UX.
+    timeline_events = events
+    if spotlight:
+        removed = False
+        deduped_events = []
+        for evt_dict in events:
+            is_spotlight_match = (
+                not removed
+                and evt_dict.get("date") == spotlight.get("date")
+                and evt_dict.get("name") == spotlight.get("title")
+            )
+            if is_spotlight_match:
+                removed = True
+                continue
+            deduped_events.append(evt_dict)
+        timeline_events = deduped_events
 
     # Build tabs for semester view (from extracted blocks data)
     tabs = None
@@ -409,7 +453,7 @@ def build_calendar_card(
         "subtitle": extracted.subtitle or "",
         "status": card_status,
         "spotlight": spotlight,
-        "events": events,
+        "events": timeline_events,
         "tabs": tabs,
         "sourceUrl": extracted.source_url or ACADEMIC_CALENDAR_SOURCE_URL,
         "suggestedQuestions": [],
