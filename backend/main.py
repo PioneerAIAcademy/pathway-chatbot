@@ -24,7 +24,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
-CHAT_MAX_BODY_SIZE = 10 * 1024          # 10KB for chat messages
+CHAT_MAX_BODY_SIZE = 512 * 1024         # 512KB for full conversation payload
 FEEDBACK_MAX_BODY_SIZE = 10 * 1024 * 1024  # 10MB for feedback screenshots
 
 

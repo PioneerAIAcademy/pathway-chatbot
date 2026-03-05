@@ -99,6 +99,10 @@ class ChatData(BaseModel):
             raise ValueError("Messages must not be empty")
         if len(v) > 50:
             raise ValueError("Too many messages. Conversation history is limited to 50 messages.")
+        # Enforce 10KB limit on the last user message only (not full history)
+        last_message = v[-1]
+        if len(last_message.content.encode("utf-8")) > 10 * 1024:
+            raise ValueError("Message too long. Please keep your message under 10KB.")
         return v
 
     def get_last_message_content(self) -> str:
