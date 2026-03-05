@@ -563,13 +563,13 @@ export function CalendarCard({
         cardData.suggestedQuestions &&
         cardData.suggestedQuestions.length > 0 && (
           <div className={`${styles.chipsContainer} flex gap-2 flex-wrap`}>
-            {cardData.suggestedQuestions.map((q) => (
+            {cardData.suggestedQuestions.slice(0, 2).map((q, i) => (
               <button
                 key={q}
                 onClick={() =>
                   append?.({ role: "user", content: q } as Message)
                 }
-                className="text-[11.5px] font-medium text-gray-500 dark:text-gray-500 px-3 py-1.5 rounded-md bg-[#f5f4f0] dark:bg-[#161b22] border border-gray-200/60 dark:border-white/[0.06] cursor-pointer transition-all hover:text-[hsl(var(--header-bg))] dark:hover:text-amber-300 hover:border-[hsl(var(--header-bg))]/15 dark:hover:border-amber-400/15 hover:bg-[hsl(var(--header-bg))]/5 dark:hover:bg-amber-400/5"
+                className={`text-[11.5px] font-medium text-gray-500 dark:text-gray-500 px-3 py-1.5 rounded-md bg-[#f5f4f0] dark:bg-[#161b22] border border-gray-200/60 dark:border-white/[0.06] cursor-pointer transition-all hover:text-[hsl(var(--header-bg))] dark:hover:text-amber-300 hover:border-[hsl(var(--header-bg))]/15 dark:hover:border-amber-400/15 hover:bg-[hsl(var(--header-bg))]/5 dark:hover:bg-amber-400/5 text-left ${i === 1 ? "hidden sm:inline-block" : "inline-block"}`}
               >
                 {q}
               </button>

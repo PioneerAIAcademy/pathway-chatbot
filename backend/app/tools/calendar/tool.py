@@ -390,26 +390,60 @@ def compute_suggestions(
 	args: CalendarToolArgs,
 	extracted: ExtractedCalendarData,
 ) -> list[str]:
+	def _add_unique(items: list[str], value: str) -> None:
+		clean = (value or "").strip()
+		if not clean:
+			return
+		lowered = clean.lower()
+		if lowered in {i.lower() for i in items}:
+			return
+		items.append(clean)
+
+	def _event_focus_question(event_name: str, event_date: str) -> str:
+		event_lower = (event_name or "").lower()
+		if "registration" in event_lower:
+			return f"How do I prepare for {event_name}?"
+		if "payment" in event_lower or "fees" in event_lower:
+			return f"What if I miss {event_name}?"
+		if "drop" in event_lower or "withdraw" in event_lower:
+			return f"What are my options after {event_name}?"
+		if "grade" in event_lower:
+			return f"How should I prepare for {event_name}?"
+		if "graduation" in event_lower or "commencement" in event_lower:
+			return f"How do I get ready for {event_name}?"
+		return f"What should I know about {event_name}?"
+
 	suggestions: list[str] = []
 
+	# 1) Deterministic anchor suggestion (safe + predictable)
 	if args.query_type.value == "block" and args.block_number:
 		other = args.block_number + 1 if args.block_number % 2 == 1 else args.block_number - 1
 		if 1 <= other <= 6:
-			suggestions.append(f"Show me Block {other} dates")
+			_add_unique(suggestions, f"Show Block {other} dates")
 		if args.season:
-			suggestions.append(f"Full {args.season.capitalize()} {args.year} semester")
+			_add_unique(suggestions, f"Full {args.season.capitalize()} semester")
 	elif args.query_type.value == "semester" and args.season:
 		season_order = ["winter", "spring", "fall"]
 		idx = season_order.index(args.season) if args.season in season_order else 0
 		next_season = season_order[(idx + 1) % 3]
-		suggestions.append(f"{next_season.capitalize()} {args.year} semester")
+		_add_unique(suggestions, f"Show {next_season.capitalize()} semester")
 	elif args.query_type.value == "graduation":
-		suggestions.append("When is the next graduation?")
+		_add_unique(suggestions, "What are the next graduation steps?")
+	elif args.query_type.value == "deadline":
+		_add_unique(suggestions, "Show all key deadlines")
 
-	if args.specific_deadline:
-		suggestions.append("Show all deadlines for this block")
+	# 2) Event-aware conversational suggestions (on-topic, extracted-data grounded)
+	for evt in extracted.events[:3]:
+		_add_unique(suggestions, _event_focus_question(evt.name, evt.date))
+		if len(suggestions) >= 2:
+			break
 
+	# 3) Deadline-specific follow-up when relevant
+	if args.specific_deadline and len(suggestions) < 2:
+		_add_unique(suggestions, "Is there a grace period?")
+
+	# 4) Fallback
 	if not suggestions:
-		suggestions.append("Show the full academic calendar")
+		_add_unique(suggestions, "Show me the full academic calendar")
 
-	return suggestions[:3]
+	return suggestions[:2]
