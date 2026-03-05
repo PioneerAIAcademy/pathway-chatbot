@@ -4,6 +4,8 @@ import ReactMarkdown, { Options } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { ReactNode } from "react";
+import { CSSProperties } from "react";
 
 import { SourceData } from "..";
 import { SourceNumberButton } from "./chat-sources";
@@ -108,6 +110,78 @@ const preprocessContent = (content: string, sources?: SourceData) => {
   );
 };
 
+const DATE_PATTERN = new RegExp(
+  [
+    "\\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{1,2}(?:,\\s*\\d{4})?\\b",
+    "\\b\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}\\b",
+    "\\b\\d{4}-\\d{2}-\\d{2}\\b",
+  ].join("|"),
+  "g",
+);
+
+const DATE_CHIP_CLASSNAME =
+  "inline-block align-baseline rounded-md px-1.5 py-[1px] text-[0.85em] font-semibold leading-[1.2] text-white";
+
+const DATE_CHIP_STYLE: CSSProperties = {
+  backgroundImage: "linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.5)), linear-gradient(hsl(var(--header-bg)), hsl(var(--header-bg)))",
+};
+
+const highlightDateText = (text: string): ReactNode[] => {
+  const matches = Array.from(text.matchAll(DATE_PATTERN));
+  if (matches.length === 0) {
+    return [text];
+  }
+
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+
+  matches.forEach((match, index) => {
+    const matched = match[0];
+    const start = match.index ?? -1;
+    if (!matched || start < cursor) {
+      return;
+    }
+
+    if (start > cursor) {
+      parts.push(text.slice(cursor, start));
+    }
+
+    parts.push(
+      <span
+        key={`date-${start}-${index}`}
+        className={DATE_CHIP_CLASSNAME}
+        style={DATE_CHIP_STYLE}
+      >
+        {matched}
+      </span>,
+    );
+    cursor = start + matched.length;
+  });
+
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+
+  return parts;
+};
+
+const highlightDatesInChildren = (children: ReactNode): ReactNode => {
+  if (typeof children === "string") {
+    return highlightDateText(children);
+  }
+
+  if (Array.isArray(children)) {
+    return children.map((child, index) => {
+      if (typeof child === "string") {
+        return <span key={`date-text-${index}`}>{highlightDateText(child)}</span>;
+      }
+      return child;
+    });
+  }
+
+  return children;
+};
+
 export default function Markdown({
   content,
   sources,
@@ -141,7 +215,10 @@ export default function Markdown({
       rehypePlugins={[rehypeKatex as any]}
       components={{
         p({ children }) {
-          return <p className="mb-2 last:mb-0">{children}</p>;
+          return <p className="mb-2 last:mb-0">{highlightDatesInChildren(children)}</p>;
+        },
+        li({ children }) {
+          return <li>{highlightDatesInChildren(children)}</li>;
         },
         code({ node, inline, className, children, ...props }) {
           if (children.length) {
