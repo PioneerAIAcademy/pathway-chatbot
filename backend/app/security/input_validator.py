@@ -40,7 +40,7 @@ class InputValidator:
     """Validates user input for security threats and prompt injection attacks."""
     
     # Maximum allowed character length based on analysis (99% of legitimate questions)
-    MAX_QUESTION_LENGTH = 500
+    MAX_QUESTION_LENGTH = 2000
     
     # Default pytector instance for reuse (lazy initialization)
     _pytector_detector = None
