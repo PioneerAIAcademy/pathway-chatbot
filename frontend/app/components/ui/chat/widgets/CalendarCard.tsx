@@ -189,13 +189,15 @@ function TimelineRow({
         <div
           className={`${styles.shimmer} w-[42px] h-10 rounded bg-gray-200/60 dark:bg-gray-700/30`}
         />
-        <div className="w-[3px] h-7 rounded-sm shrink-0 mt-1 bg-gray-200/60 dark:bg-gray-700/30" />
+        <div
+          className={`${styles.skeletonGuide} w-[3px] h-7 rounded-sm shrink-0 mt-1 bg-gray-200/60 dark:bg-gray-700/30`}
+        />
         <div className="flex-1 min-w-0 pt-1 space-y-1.5">
           <div
-            className={`${styles.shimmer} h-3.5 rounded bg-gray-200/60 dark:bg-gray-700/30`}
+            className={`${styles.skeletonLineMain} ${styles.shimmer} h-3.5 rounded bg-gray-200/60 dark:bg-gray-700/30`}
           />
           <div
-            className={`${styles.shimmer} h-2.5 w-3/4 rounded bg-gray-200/60 dark:bg-gray-700/30`}
+            className={`${styles.skeletonLineSub} ${styles.shimmer} h-2.5 w-3/4 rounded bg-gray-200/60 dark:bg-gray-700/30`}
           />
         </div>
         <div

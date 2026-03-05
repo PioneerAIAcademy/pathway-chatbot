@@ -204,6 +204,54 @@
   position: relative;
 }
 
+/* Skeleton row separator line draw (matches real row rhythm) */
+.skeletonRow::after {
+  content: "";
+  position: absolute;
+  left: 54px;
+  right: 12px;
+  bottom: 0;
+  height: 1px;
+  background: rgba(0, 0, 0, 0.08);
+  transform-origin: left;
+  transform: scaleX(0);
+  animation: drawInline 0.55s cubic-bezier(0.22, 1, 0.36, 1)
+    calc(var(--row-index, 0) * 110ms + 0.25s) forwards;
+}
+
+:global(.dark) .skeletonRow::after {
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.skeletonRow:last-child::after {
+  display: none;
+}
+
+/* Skeleton vertical guide line draw */
+.skeletonGuide {
+  transform-origin: top center;
+  transform: scaleY(0);
+  animation: skeletonGuideGrow 0.35s cubic-bezier(0.22, 1, 0.36, 1)
+    calc(var(--row-index, 0) * 110ms + 0.15s) forwards;
+}
+
+/* Skeleton inner text lines draw left->right before shimmer sweeps over them */
+.skeletonLineMain,
+.skeletonLineSub {
+  transform-origin: left;
+  transform: scaleX(0);
+}
+
+.skeletonLineMain {
+  animation: drawHorizontal 0.5s cubic-bezier(0.22, 1, 0.36, 1)
+    calc(var(--row-index, 0) * 110ms + 0.2s) forwards;
+}
+
+.skeletonLineSub {
+  animation: drawHorizontal 0.48s cubic-bezier(0.22, 1, 0.36, 1)
+    calc(var(--row-index, 0) * 110ms + 0.3s) forwards;
+}
+
 /* The colored pip "grows" into view slightly after its row */
 .pip {
   transform: scaleY(0);
@@ -232,6 +280,15 @@
 }
 
 @keyframes pipGrow {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes skeletonGuideGrow {
   from {
     transform: scaleY(0);
   }
@@ -393,6 +450,22 @@
 
   .row::after {
     transform: scaleX(1);
+    animation: none;
+  }
+
+  .skeletonRow::after {
+    transform: scaleX(1);
+    animation: none;
+  }
+
+  .skeletonGuide {
+    transform: none;
+    animation: none;
+  }
+
+  .skeletonLineMain,
+  .skeletonLineSub {
+    transform: none;
     animation: none;
   }
 
