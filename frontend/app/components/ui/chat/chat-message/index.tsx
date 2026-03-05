@@ -46,14 +46,6 @@ function ChatMessageContent({
 }) {
   const annotations = message.annotations as MessageAnnotation[] | undefined;
 
-  // DEBUG: log annotation types arriving for calendar diagnosis
-  if (annotations?.length) {
-    const types = annotations.map((a) => (a as any)?.type ?? "unknown");
-    console.log("[ChatMessage] annotation types:", types);
-  } else {
-    console.log("[ChatMessage] no annotations, content:", message.content?.slice(0, 80));
-  }
-
   if (!annotations?.length) return <Markdown content={message.content} />;
 
 
