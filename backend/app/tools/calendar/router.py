@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from app.tools.calendar.schema import CalendarToolArgs
 from app.tools.calendar.tool import get_calendar_tool_definition
-from app.tools.calendar.vocabulary import normalize_deadline_term
+from app.tools.calendar.vocabulary import normalize_deadline_term, normalize_query_scope
 
 logger = logging.getLogger("uvicorn")
 
@@ -53,6 +53,14 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = (
 	"if they are asking about the BYU-Pathway academic calendar (dates, "
 	"deadlines, blocks, semesters, registration, graduation, commencement, "
 	"drop/add dates, payment deadlines, etc).\n\n"
+	"WARNING: STRICT ROUTING CONTRACT — VIOLATIONS ARE NOT ACCEPTABLE.\n"
+	"MANDATORY RULES:\n"
+	"1) IF CALENDAR INTENT IS CLEAR, CALL lookup_academic_calendar.\n"
+	"2) WHEN CALLING THE TOOL, USE ONLY VALID ARG KEYS: "
+	"query_type, year, season, block_number, specific_deadline, scope.\n"
+	"3) DO NOT INVENT KEYS OR VALUES. USE CANONICAL VALUES ONLY.\n"
+	"4) IF AMBIGUOUS, ASK A BRIEF CLARIFICATION QUESTION (NO TOOL CALL).\n"
+	"5) IF CLEARLY NOT CALENDAR, RETURN EMPTY MESSAGE (NO TOOL CALL).\n\n"
 	"{current_context}\n\n"
 	"If YES and you are confident, call the lookup_academic_calendar function "
 	"with appropriate arguments. For follow-up messages like 'show me in card "
@@ -67,6 +75,14 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = (
 	"'current semester', use the current date context above to determine the "
 	"correct block number and season. Always resolve ambiguous time references "
 	"to the current or nearest upcoming block/semester.\n\n"
+	"The user may write in ANY language. Always map meaning to canonical args "
+	"(query_type, year, season, block_number, specific_deadline, scope). "
+	"For deadlines, use canonical keys: financial_hold, registration, "
+	"priority_registration, application, add_course, drop, refund, payment, "
+	"late_fees, withdraw, grades, tuition_discount.\n\n"
+	"When the user asks for 'this year', 'whole year', 'full year', 'all terms', "
+	"or 'all blocks', set scope='full_year' and avoid narrowing to a single "
+	"season/block unless the user explicitly asks for one.\n\n"
 	"IMPORTANT: If the user asks for dates 'in text format' or says 'list the "
 	"dates', do NOT call the function — they want a plain text response, not "
 	"the calendar card.\n\n"
@@ -110,6 +126,36 @@ def _extract_term_context(text: str) -> tuple[Optional[str], Optional[int], Opti
 	return season, year, block
 
 
+def _extract_year(text: str) -> Optional[int]:
+	match = re.search(r"\b(20\d{2})\b", (text or "").lower())
+	return int(match.group(1)) if match else None
+
+
+def _infer_deadline_from_history(chat_history: Optional[List[ChatMessage]]) -> Optional[str]:
+	if not chat_history:
+		return None
+	for msg in reversed(chat_history[-_MAX_HISTORY_MESSAGES:]):
+		content = getattr(msg, "content", "") or ""
+		deadline = normalize_deadline_term(content)
+		if deadline:
+			return deadline
+	return None
+
+
+def _infer_year_from_history(
+	chat_history: Optional[List[ChatMessage]],
+	default_year: int,
+) -> int:
+	if not chat_history:
+		return default_year
+	for msg in reversed(chat_history[-_MAX_HISTORY_MESSAGES:]):
+		content = getattr(msg, "content", "") or ""
+		year = _extract_year(content)
+		if year:
+			return year
+	return default_year
+
+
 def _history_has_calendar_context(chat_history: Optional[List[ChatMessage]]) -> bool:
 	if not chat_history:
 		return False
@@ -124,6 +170,7 @@ def _build_deadline_args_from_context(
 	user_timezone: str,
 	chat_history: Optional[List[ChatMessage]],
 	specific_deadline: str,
+	scope: str = "term",
 ) -> CalendarToolArgs:
 	try:
 		today = datetime.now(ZoneInfo(user_timezone)).date()
@@ -132,6 +179,18 @@ def _build_deadline_args_from_context(
 
 	season, block = _season_block_for_month(today.month)
 	year = today.year
+
+	if scope == "full_year":
+		year = _extract_year(message) or _infer_year_from_history(chat_history, today.year)
+		return CalendarToolArgs(
+			query_type="deadline",
+			season=None,
+			year=year,
+			block_number=None,
+			specific_deadline=specific_deadline,
+			scope="full_year",
+			timezone=user_timezone,
+		)
 
 	candidates = [message]
 	if chat_history:
@@ -155,6 +214,32 @@ def _build_deadline_args_from_context(
 		year=year,
 		block_number=block,
 		specific_deadline=specific_deadline,
+		scope="term",
+		timezone=user_timezone,
+	)
+
+
+def _build_year_scope_args_from_context(
+	message: str,
+	user_timezone: str,
+	chat_history: Optional[List[ChatMessage]],
+	explicit_deadline: Optional[str],
+) -> CalendarToolArgs:
+	try:
+		today = datetime.now(ZoneInfo(user_timezone)).date()
+	except Exception:
+		today = datetime.now(ZoneInfo("UTC")).date()
+
+	year = _extract_year(message) or _infer_year_from_history(chat_history, today.year)
+	deadline = explicit_deadline or _infer_deadline_from_history(chat_history)
+
+	return CalendarToolArgs(
+		query_type="deadline" if deadline else "semester",
+		season=None,
+		year=year,
+		block_number=None,
+		specific_deadline=deadline,
+		scope="full_year",
 		timezone=user_timezone,
 	)
 
@@ -175,6 +260,7 @@ async def detect_calendar_intent_via_llm(
 	"""
 	tool_def = get_calendar_tool_definition()
 	explicit_deadline = normalize_deadline_term(message)
+	explicit_scope = normalize_query_scope(message)
 
 	current_ctx = _current_term_context(user_timezone)
 	prompt = _ROUTER_SYSTEM_PROMPT_TEMPLATE.format(current_context=current_ctx)
@@ -203,27 +289,60 @@ async def detect_calendar_intent_via_llm(
 	if tool_calls:
 		tc = tool_calls[0]
 		try:
+			try:
+				current_year = datetime.now(ZoneInfo(user_timezone)).year
+			except Exception:
+				current_year = datetime.now(ZoneInfo("UTC")).year
+
 			fn = getattr(tc, "function", None) or tc.get("function", {})
 			args_str = getattr(fn, "arguments", None) or fn.get("arguments", "{}")
 			args_dict = json.loads(args_str)
+			if args_dict.get("query_type") == "full_year":
+				args_dict["query_type"] = "semester"
+				args_dict["scope"] = "full_year"
 			if explicit_deadline:
 				args_dict["specific_deadline"] = explicit_deadline
+			if explicit_scope == "full_year":
+				args_dict["scope"] = "full_year"
+				args_dict["season"] = None
+				args_dict["block_number"] = None
+				args_dict["year"] = _extract_year(message) or _infer_year_from_history(
+					chat_history,
+					current_year,
+				)
 			args_dict.setdefault("timezone", user_timezone)
+			args_dict.setdefault("scope", "term")
 			return CalendarToolArgs(**args_dict), None
 		except Exception as e:
 			logger.error(f"Failed to parse calendar tool args: {e}")
-			return None, None
+			# Fall through to deterministic normalization/fallback paths below.
+
+	if explicit_scope == "full_year" and (
+		_CALENDAR_CONTEXT_HINTS.search(message or "")
+		or _history_has_calendar_context(chat_history)
+	):
+		return (
+			_build_year_scope_args_from_context(
+				message,
+				user_timezone,
+				chat_history,
+				explicit_deadline,
+			),
+			None,
+		)
 
 	if explicit_deadline and (
 		_CALENDAR_CONTEXT_HINTS.search(message or "")
 		or _history_has_calendar_context(chat_history)
 	):
+		scope = "full_year" if explicit_scope == "full_year" else "term"
 		return (
 			_build_deadline_args_from_context(
 				message,
 				user_timezone,
 				chat_history,
 				explicit_deadline,
+				scope=scope,
 			),
 			None,
 		)
@@ -252,6 +371,7 @@ async def detect_calendar_intent_via_llm(
 				season=season,
 				year=today.year,
 				block_number=block,
+				scope="term",
 				timezone=user_timezone,
 			),
 			None,

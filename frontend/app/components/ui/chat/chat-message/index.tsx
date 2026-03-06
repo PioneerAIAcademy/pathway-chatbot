@@ -53,7 +53,7 @@ function CalendarErrorNotice({
       : "A temporary issue occurred while loading the academic calendar.";
 
   return (
-    <div className="rounded-xl border border-amber-500/35 bg-amber-500/8 dark:bg-amber-500/10 px-4 py-3">
+    <div className="self-start inline-block w-fit max-w-full rounded-xl border border-amber-500/35 bg-amber-500/8 dark:bg-amber-500/10 px-4 py-3">
       <div className="flex items-start gap-2.5">
         <AlertTriangle className="w-4 h-4 mt-0.5 text-amber-600 dark:text-amber-400 shrink-0" />
         <div className="min-w-0">
@@ -161,6 +161,10 @@ function ChatMessageContent({
     lowerContent === "sorry, i don't know." ||
     lowerContent === "sorry, i do not know." ||
     lowerContent.startsWith("i'm sorry, but i can't assist with that request");
+  const hasSubstantiveText =
+    lowerContent.length > 0 && !isGenericFailureCopy;
+  const shouldShowCalendarErrorNotice =
+    hasCalendarError && !hasSubstantiveText;
   const shouldHideMarkdownForCalendarError =
     hasCalendarError && isGenericFailureCopy;
 
@@ -239,7 +243,7 @@ function ChatMessageContent({
     },
     {
       order: 0.5,
-      component: hasCalendarError ? (
+      component: shouldShowCalendarErrorNotice ? (
         <CalendarErrorNotice reason={calError[0]?.reason} append={append} />
       ) : calendarData[0] ? (
         <CalendarCard data={calendarData[0]} append={append} />

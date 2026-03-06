@@ -21,6 +21,10 @@ logger = logging.getLogger("uvicorn")
 # Pipeline involves: LLM tool-choice call + Pinecone retrieval + LLM extraction.
 _CALENDAR_TIMEOUT = 25.0
 
+# Calendar-only requests can legitimately take longer because the entire answer
+# depends on retrieval + extraction. Keep this separate from mixed RAG path.
+_CALENDAR_ONLY_TIMEOUT = 75.0
+
 # Emit calendar patches after this many text tokens have streamed
 _MIN_TOKENS_BEFORE_CALENDAR = 15
 
@@ -222,29 +226,103 @@ class VercelStreamResponse(StreamingResponse):
 
             if calendar_intro is not None:
                 # ---- Calendar-only path (no RAG, no events) ----
-                # Skip the aiostream merge entirely — there's no event
-                # generator to merge with since no RAG engine is running.
-                final_response = calendar_intro
-                yield cls.convert_text(calendar_intro)
+                yield cls.convert_data(
+                    {
+                        "type": "events",
+                        "data": {"title": get_retrieval_start_message()},
+                        "trace_id": trace_id,
+                    }
+                )
 
+                # Resolve calendar data FIRST to avoid optimistic intro/skeleton
+                # when requested data does not exist (e.g., unsupported year).
                 if calendar_task is not None:
-                    # Emit skeleton card immediately as a thinking indicator.
-                    # The pipeline takes ~3-5s; this shows shimmer placeholders
-                    # so the user knows a card is loading.
-                    yield cls.convert_data(
-                        {
-                            "type": "calendar_skeleton",
-                            "data": {"cardType": "block"},
-                            "trace_id": trace_id,
-                        }
-                    )
+                    try:
+                        logger.info("Calendar-only path: awaiting pipeline before emitting UI...")
+                        loop = asyncio.get_running_loop()
+                        started_at = loop.time()
+                        while True:
+                            remaining = _CALENDAR_ONLY_TIMEOUT - (loop.time() - started_at)
+                            if remaining <= 0:
+                                raise asyncio.TimeoutError
 
-                    logger.info("Calendar-only path: awaiting pipeline...")
-                    for patch in await _resolve_calendar_patches(
-                        calendar_task, trace_id
-                    ):
-                        yield patch
-                    logger.info("Calendar-only path: patches emitted")
+                            try:
+                                calendar_data = await asyncio.wait_for(
+                                    asyncio.shield(calendar_task),
+                                    timeout=min(1.0, remaining),
+                                )
+                                break
+                            except asyncio.TimeoutError:
+                                # Keep the stream active so frontend "thinking"
+                                # state does not appear to freeze while extraction
+                                # is still running.
+                                yield cls.convert_text("")
+                    except asyncio.TimeoutError:
+                        fallback = "I couldn’t load the academic calendar right now. Please try again."
+                        final_response = fallback
+                        yield cls.convert_text(fallback)
+                        yield cls.convert_data(
+                            {
+                                "type": "calendar_error",
+                                "data": {"reason": "timeout"},
+                                "trace_id": trace_id,
+                            }
+                        )
+                        calendar_data = None
+                    except Exception:
+                        fallback = "I couldn’t load the academic calendar right now. Please try again."
+                        final_response = fallback
+                        yield cls.convert_text(fallback)
+                        yield cls.convert_data(
+                            {
+                                "type": "calendar_error",
+                                "data": {"reason": "error"},
+                                "trace_id": trace_id,
+                            }
+                        )
+                        calendar_data = None
+
+                    if isinstance(calendar_data, dict) and calendar_data.get("__calendar_error_reason") == "unsupported_year":
+                        requested_year = calendar_data.get("requestedYear")
+                        available_years = calendar_data.get("availableYears") or []
+                        if available_years:
+                            years_text = ", ".join(str(y) for y in available_years)
+                            message = (
+                                f"I don’t have verified academic calendar dates for {requested_year} yet. "
+                                f"I currently have official dates for: {years_text}."
+                            )
+                        else:
+                            message = (
+                                f"I don’t have verified academic calendar dates for {requested_year} yet."
+                            )
+                        final_response = message
+                        yield cls.convert_text(message)
+                        yield cls.convert_data(
+                            {
+                                "type": "calendar_error",
+                                "data": {"reason": "unsupported_year"},
+                                "trace_id": trace_id,
+                            }
+                        )
+                    elif isinstance(calendar_data, dict):
+                        final_response = calendar_intro
+                        yield cls.convert_text(calendar_intro)
+                        for patch in _build_calendar_patches(calendar_data, trace_id):
+                            yield patch
+                    elif calendar_data is None and not final_response:
+                        fallback = "I couldn’t find calendar data for that request."
+                        final_response = fallback
+                        yield cls.convert_text(fallback)
+                        yield cls.convert_data(
+                            {
+                                "type": "calendar_error",
+                                "data": {"reason": "no_data"},
+                                "trace_id": trace_id,
+                            }
+                        )
+                else:
+                    final_response = calendar_intro
+                    yield cls.convert_text(calendar_intro)
 
                 event_handler.is_done = True
 
@@ -321,6 +399,32 @@ async def _resolve_calendar_patches(
         )
         return patches
 
+    if isinstance(calendar_data, dict) and calendar_data.get("__calendar_error_reason") == "unsupported_year":
+        requested_year = calendar_data.get("requestedYear")
+        available_years = calendar_data.get("availableYears") or []
+        if available_years:
+            years_text = ", ".join(str(y) for y in available_years)
+            message = (
+                f" I don’t have verified academic calendar dates for {requested_year} yet. "
+                f"I currently have official dates for: {years_text}."
+            )
+        else:
+            message = (
+                f" I don’t have verified academic calendar dates for {requested_year} yet."
+            )
+
+        patches.append(VercelStreamResponse.convert_text(message))
+        patches.append(
+            VercelStreamResponse.convert_data(
+                {
+                    "type": "calendar_error",
+                    "data": {"reason": "unsupported_year"},
+                    "trace_id": trace_id,
+                }
+            )
+        )
+        return patches
+
     if calendar_data is None:
         logger.warning("Calendar pipeline returned None — no card will be rendered")
         patches.append(
@@ -329,6 +433,16 @@ async def _resolve_calendar_patches(
             )
         )
         return patches
+
+    patches.extend(_build_calendar_patches(calendar_data, trace_id))
+    return patches
+
+
+def _build_calendar_patches(
+    calendar_data: dict,
+    trace_id: str | None,
+) -> list[str]:
+    patches: list[str] = []
 
     # 1) Skeleton — triggers the animated card outline
     patches.append(

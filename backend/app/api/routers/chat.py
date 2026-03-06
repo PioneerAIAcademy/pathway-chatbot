@@ -35,6 +35,7 @@ from app.tools.calendar import (
     build_calendar_intro,
     build_initial_calendar_metadata,
     detect_calendar_intent_via_llm,
+    localize_calendar_intro,
     run_calendar_pipeline,
 )
 import os
@@ -293,9 +294,16 @@ async def chat(
                 calendar_args,
                 shared_index,
                 user_query=last_message_content,
+                user_language=user_language,
             )
             if pipeline_metadata:
                 calendar_metadata.update(pipeline_metadata)
+            if card is None and pipeline_metadata.get("pipeline_status") == "unsupported_year":
+                return {
+                    "__calendar_error_reason": "unsupported_year",
+                    "requestedYear": pipeline_metadata.get("requested_year"),
+                    "availableYears": pipeline_metadata.get("available_years_from_nodes", []),
+                }
             return card
 
         async def _on_stream_end(final_response: str) -> None:
@@ -343,6 +351,11 @@ async def chat(
         calendar_intro: Optional[str] = None
         if calendar_args is not None:
             calendar_intro = build_calendar_intro(calendar_args)
+            calendar_intro = await localize_calendar_intro(
+                calendar_intro,
+                user_language,
+                last_message_content,
+            )
 
         async def _get_response() -> Any:
             nonlocal chat_engine

@@ -13,6 +13,11 @@ class CalendarQueryType(str, Enum):
 	GRADUATION = "graduation"
 
 
+class CalendarQueryScope(str, Enum):
+	TERM = "term"
+	FULL_YEAR = "full_year"
+
+
 class CalendarToolArgs(BaseModel):
 	"""Arguments the LLM provides when calling the calendar tool."""
 
@@ -29,9 +34,16 @@ class CalendarToolArgs(BaseModel):
 	specific_deadline: Optional[str] = Field(
 		None,
 		description=(
-			"Specific deadline type: registration, priority_registration, "
+			"Specific deadline type: financial_hold, registration, priority_registration, "
 			"add_course, drop, refund, payment, late_fees, withdraw, "
 			"tuition_discount, application, grades"
+		),
+	)
+	scope: CalendarQueryScope = Field(
+		default=CalendarQueryScope.TERM,
+		description=(
+			"Scope of the query: 'term' for a specific season/block, "
+			"'full_year' for an entire academic year overview"
 		),
 	)
 	timezone: str = Field("UTC", description="IANA timezone from user")
@@ -80,5 +92,8 @@ class ExtractedCalendarData(BaseModel):
 	footnote: Optional[str] = None
 	blocks: Optional[list[ExtractedBlockData]] = Field(
 		None,
-		description="For semester queries: events grouped by block within the semester",
+		description=(
+			"For semester/year overview queries: events grouped by block/term "
+			"within the selected scope"
+		),
 	)

@@ -105,8 +105,14 @@ def _season_for_block(block_number: Optional[int]) -> Optional[str]:
 async def query_pinecone_for_calendar(args: CalendarToolArgs, retriever) -> list:
 	query_parts = ["academic calendar"]
 	year_included = False
+	scope = (getattr(args, "scope", "term") or "term").lower()
 
-	if args.season:
+	if scope == "full_year":
+		query_parts.append(
+			f"full year {args.year} winter spring fall all blocks start end dates deadlines"
+		)
+		year_included = True
+	elif args.season:
 		query_parts.append(f"{args.season} {args.year}")
 		year_included = True
 	if args.block_number:
@@ -125,6 +131,8 @@ async def query_pinecone_for_calendar(args: CalendarToolArgs, retriever) -> list
 
 
 _MAX_CONTEXT_CHARS = 4000
+_MAX_CONTEXT_CHARS_FULL_YEAR = 18000
+_MAX_CONTEXT_NODES_FULL_YEAR = 24
 _MAX_EXTRACTION_ATTEMPTS = 2
 
 _EXTRACTION_SYSTEM = (
@@ -142,7 +150,9 @@ _EXTRACTION_SYSTEM = (
 	'  "blocks": null or [{"block_label": "Block 1", "events": [...same event shape...]}]\n'
 	"}\n"
 	"Rules:\n"
+	"- WARNING: DO NOT INVENT, SHIFT, OR EXTRAPOLATE YEARS OR DATES. USE ONLY DATES EXPLICITLY PRESENT IN DOCUMENTS.\n"
 	"- Only include events matching the query.\n"
+	"- If scope is full_year, include all relevant events across Winter, Spring, and Fall for that year, grouped by block/term where possible.\n"
 	"- Dates MUST be ISO format YYYY-MM-DD. Omit events with ambiguous dates.\n"
 	"- For semester queries, group events by block in the 'blocks' field.\n"
 	"- For single-block queries, leave 'blocks' as null.\n"
@@ -158,12 +168,16 @@ async def extract_structured_data(
 	if not nodes:
 		return None
 
+	scope = (getattr(args, "scope", "term") or "term").lower()
+	max_chars = _MAX_CONTEXT_CHARS_FULL_YEAR if scope == "full_year" else _MAX_CONTEXT_CHARS
+	max_nodes = _MAX_CONTEXT_NODES_FULL_YEAR if scope == "full_year" else 10
+
 	context_parts: list[str] = []
 	total_chars = 0
-	for node in nodes[:10]:
+	for node in nodes[:max_nodes]:
 		text = node.text
-		if total_chars + len(text) > _MAX_CONTEXT_CHARS:
-			remaining = _MAX_CONTEXT_CHARS - total_chars
+		if total_chars + len(text) > max_chars:
+			remaining = max_chars - total_chars
 			if remaining > 200:
 				context_parts.append(text[:remaining] + "\n[...truncated]")
 			break
@@ -174,6 +188,8 @@ async def extract_structured_data(
 	query_desc = args.query_type.value
 	if args.season:
 		query_desc += f" for {args.season} {args.year}"
+	elif scope == "full_year":
+		query_desc += f" for full year {args.year}"
 	if args.block_number:
 		query_desc += f" block {args.block_number}"
 	if args.specific_deadline:
@@ -318,7 +334,7 @@ def build_calendar_card(
 	if spotlight:
 		removed = False
 		deduped_events = []
-		for evt_dict in events:
+		for evt_dict in timeline_events:
 			is_spotlight_match = (
 				not removed
 				and evt_dict.get("date") == spotlight.get("date")

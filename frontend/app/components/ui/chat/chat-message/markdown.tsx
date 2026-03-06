@@ -112,6 +112,7 @@ const preprocessContent = (content: string, sources?: SourceData) => {
 
 const DATE_PATTERN = new RegExp(
   [
+    "\\b(?:Mon(?:day)?|Tue(?:s(?:day)?)?|Wed(?:nesday)?|Thu(?:r(?:s(?:day)?)?)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?),?\\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{1,2}(?:,\\s*\\d{4})?\\b",
     "\\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{1,2}(?:,\\s*\\d{4})?\\b",
     "\\b\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}\\b",
     "\\b\\d{4}-\\d{2}-\\d{2}\\b",
@@ -120,10 +121,23 @@ const DATE_PATTERN = new RegExp(
 );
 
 const DATE_CHIP_CLASSNAME =
-  "inline-block align-baseline rounded-md px-1.5 py-[1px] text-[0.85em] font-semibold leading-[1.2] text-white";
+  "inline-block align-baseline border rounded-[5px]";
 
 const DATE_CHIP_STYLE: CSSProperties = {
-  backgroundImage: "linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.5)), linear-gradient(hsl(var(--header-bg)), hsl(var(--header-bg)))",
+  background: "rgba(163, 52, 34, 0.21)",
+  color: "#cc7265",
+  borderColor: "rgba(163, 52, 34, 0.40)",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderRadius: "5px",
+  padding: "1.5px 6px",
+  fontFamily:
+    "'Söhne Mono', ui-monospace, 'SFMono-Regular', 'Cascadia Code', monospace",
+  fontSize: "13.2px",
+  lineHeight: 1.2,
+  letterSpacing: "0.01em",
+  fontWeight: 400,
+  whiteSpace: "nowrap",
 };
 
 const highlightDateText = (text: string): ReactNode[] => {
@@ -215,7 +229,7 @@ export default function Markdown({
       rehypePlugins={[rehypeKatex as any]}
       components={{
         p({ children }) {
-          return <p className="mb-2 last:mb-0">{highlightDatesInChildren(children)}</p>;
+          return <p className="mb-2 last:mb-0">{children}</p>;
         },
         li({ children }) {
           return <li>{highlightDatesInChildren(children)}</li>;
