@@ -71,16 +71,16 @@ const statusPillClass: Record<string, string> = {
 // Reveal timing (ms from data-ready moment)
 // ---------------------------------------------------------------
 const TIMING = {
-  header: 200,
-  tabs: 500,
-  spotlight: 550,
-  timeline: 800,
-  rowBase: 1000,
-  rowInterval: 180,
-  footerDelay: 500,
+  header: 1200,
+  tabs: 2600,
+  spotlight: 3000,
+  timeline: 3600,
+  rowBase: 4300,
+  rowInterval: 520,
+  footerDelay: 1200,
 } as const;
 
-const TIMER_DURATION = 5000;
+const TIMER_DURATION = 12000;
 const SKELETON_ROW_COUNT = 4;
 
 // --- Card type icon ---
@@ -341,6 +341,7 @@ export function CalendarCard({
   // ---------------------------------------------------------------
   const [mounted, setMounted] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [showStallNotice, setShowStallNotice] = useState(false);
 
   // Card frame animation — starts immediately on mount
   useEffect(() => {
@@ -362,6 +363,19 @@ export function CalendarCard({
       setElapsed(0);
     };
   }, [dataReady]);
+
+  useEffect(() => {
+    if (dataReady || state?.phase !== "skeleton") {
+      setShowStallNotice(false);
+      return;
+    }
+
+    const stallId = setTimeout(() => {
+      setShowStallNotice(true);
+    }, 16000);
+
+    return () => clearTimeout(stallId);
+  }, [dataReady, state?.phase]);
 
   // Section visibility based on elapsed time
   const headerLoaded = dataReady && elapsed >= TIMING.header;
@@ -590,6 +604,29 @@ export function CalendarCard({
         >
           {cardData.textFormatOffer}
         </button>
+      )}
+
+      {showStallNotice && !dataReady && (
+        <div className="rounded-xl border border-amber-500/35 bg-amber-500/8 dark:bg-amber-500/10 px-4 py-3">
+          <div className="text-[13px] font-semibold text-amber-700 dark:text-amber-300">
+            Still loading calendar details
+          </div>
+          <p className="text-[12px] text-amber-800/90 dark:text-amber-200/90 mt-0.5">
+            Network lag or a temporary issue may be delaying this card.
+          </p>
+          <button
+            onClick={() =>
+              append?.({
+                role: "user",
+                content: "Please retry the academic calendar request",
+              } as Message)
+            }
+            className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-1 rounded-md border border-amber-500/40 text-amber-700 dark:text-amber-200 hover:bg-amber-500/10 dark:hover:bg-amber-500/20 transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Try again
+          </button>
+        </div>
       )}
     </div>
   );

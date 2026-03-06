@@ -1,4 +1,4 @@
-import { Check, Copy, RefreshCw, Pencil } from "lucide-react";
+import { AlertTriangle, Check, Copy, RefreshCw, Pencil } from "lucide-react";
 
 import { Message } from "ai";
 import { Fragment, useState } from "react";
@@ -34,6 +34,52 @@ type ContentDisplayConfig = {
   order: number;
   component: JSX.Element | null;
 };
+
+function CalendarErrorNotice({
+  reason,
+  append,
+}: {
+  reason?: string;
+  append: Pick<ChatHandler, "append">["append"];
+}) {
+  const title =
+    reason === "timeout"
+      ? "Calendar is taking longer than expected"
+      : "Calendar couldn't load right now";
+
+  const message =
+    reason === "timeout"
+      ? "Network lag or a temporary service issue may have interrupted loading."
+      : "A temporary issue occurred while loading the academic calendar.";
+
+  return (
+    <div className="rounded-xl border border-amber-500/35 bg-amber-500/8 dark:bg-amber-500/10 px-4 py-3">
+      <div className="flex items-start gap-2.5">
+        <AlertTriangle className="w-4 h-4 mt-0.5 text-amber-600 dark:text-amber-400 shrink-0" />
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold text-amber-700 dark:text-amber-300">
+            {title}
+          </div>
+          <p className="text-[12px] text-amber-800/90 dark:text-amber-200/90 mt-0.5">
+            {message}
+          </p>
+          <button
+            onClick={() =>
+              append?.({
+                role: "user",
+                content: "Please retry the academic calendar request",
+              } as Message)
+            }
+            className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-1 rounded-md border border-amber-500/40 text-amber-700 dark:text-amber-200 hover:bg-amber-500/10 dark:hover:bg-amber-500/20 transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            Try again
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ChatMessageContent({
   message,
@@ -109,11 +155,19 @@ function ChatMessageContent({
     annotations,
     MessageAnnotationType.CALENDAR_ERROR,
   );
+  const hasCalendarError = calError.length > 0;
+  const lowerContent = (message.content || "").trim().toLowerCase();
+  const isGenericFailureCopy =
+    lowerContent === "sorry, i don't know." ||
+    lowerContent === "sorry, i do not know." ||
+    lowerContent.startsWith("i'm sorry, but i can't assist with that request");
+  const shouldHideMarkdownForCalendarError =
+    hasCalendarError && isGenericFailureCopy;
 
   // Assemble progressive state from whatever patches have arrived
   let calendarState: CalendarCardState | undefined;
 
-  if (calError.length > 0) {
+  if (hasCalendarError) {
     // Pipeline failed — don't show skeleton or card
     calendarState = undefined;
   } else if (calFooter.length > 0) {
@@ -179,11 +233,15 @@ function ChatMessageContent({
     },
     {
       order: 0,
-      component: <Markdown content={message.content} sources={sourceData[0]} />,
+      component: shouldHideMarkdownForCalendarError ? null : (
+        <Markdown content={message.content} sources={sourceData[0]} />
+      ),
     },
     {
       order: 0.5,
-      component: calendarData[0] ? (
+      component: hasCalendarError ? (
+        <CalendarErrorNotice reason={calError[0]?.reason} append={append} />
+      ) : calendarData[0] ? (
         <CalendarCard data={calendarData[0]} append={append} />
       ) : calendarState ? (
         <CalendarCard state={calendarState} append={append} />
