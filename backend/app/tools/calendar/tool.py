@@ -23,6 +23,7 @@ from app.tools.calendar.schema import (
 	ExtractedCalendarData,
 	ExtractedCalendarEvent,
 )
+from app.tools.calendar.vocabulary import event_matches_deadline
 
 logger = logging.getLogger("uvicorn")
 
@@ -299,6 +300,20 @@ def build_calendar_card(
 				break
 
 	timeline_events = events
+	if args.query_type.value == "deadline" and args.specific_deadline:
+		filtered_events = [
+			evt_dict
+			for evt_dict in timeline_events
+			if event_matches_deadline(evt_dict.get("name", ""), args.specific_deadline)
+		]
+		if filtered_events:
+			timeline_events = filtered_events
+			if spotlight and not event_matches_deadline(
+				spotlight.get("title", ""),
+				args.specific_deadline,
+			):
+				spotlight = None
+
 	if spotlight:
 		removed = False
 		deduped_events = []

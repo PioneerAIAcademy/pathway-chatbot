@@ -19,11 +19,17 @@ from zoneinfo import ZoneInfo
 
 from app.tools.calendar.schema import CalendarToolArgs
 from app.tools.calendar.tool import get_calendar_tool_definition
+from app.tools.calendar.vocabulary import normalize_deadline_term
 
 logger = logging.getLogger("uvicorn")
 
 # Max history messages to include for follow-up context
 _MAX_HISTORY_MESSAGES = 4
+_CALENDAR_CONTEXT_HINTS = re.compile(
+	r"\b(academic|calendar|block|term|semester|registration|refund|withdraw|"
+	r"tuition|deadline|grades|hold|graduation|commencement|pathway|byu)\b",
+	re.IGNORECASE,
+)
 
 
 def _season_block_for_month(month: int) -> tuple[str, int]:
@@ -92,6 +98,67 @@ def _current_term_context(user_timezone: str) -> str:
 	)
 
 
+def _extract_term_context(text: str) -> tuple[Optional[str], Optional[int], Optional[int]]:
+	lowered = (text or "").lower()
+	season_match = re.search(r"\b(winter|spring|fall|summer)\b", lowered)
+	year_match = re.search(r"\b(20\d{2})\b", lowered)
+	block_match = re.search(r"\b(?:block|term)\s*([1-6])\b", lowered)
+
+	season = season_match.group(1) if season_match else None
+	year = int(year_match.group(1)) if year_match else None
+	block = int(block_match.group(1)) if block_match else None
+	return season, year, block
+
+
+def _history_has_calendar_context(chat_history: Optional[List[ChatMessage]]) -> bool:
+	if not chat_history:
+		return False
+	for msg in reversed(chat_history[-_MAX_HISTORY_MESSAGES:]):
+		if _CALENDAR_CONTEXT_HINTS.search(getattr(msg, "content", "") or ""):
+			return True
+	return False
+
+
+def _build_deadline_args_from_context(
+	message: str,
+	user_timezone: str,
+	chat_history: Optional[List[ChatMessage]],
+	specific_deadline: str,
+) -> CalendarToolArgs:
+	try:
+		today = datetime.now(ZoneInfo(user_timezone)).date()
+	except Exception:
+		today = datetime.now(ZoneInfo("UTC")).date()
+
+	season, block = _season_block_for_month(today.month)
+	year = today.year
+
+	candidates = [message]
+	if chat_history:
+		for msg in reversed(chat_history[-_MAX_HISTORY_MESSAGES:]):
+			candidates.append(getattr(msg, "content", "") or "")
+
+	for text in candidates:
+		s_text, y_text, b_text = _extract_term_context(text)
+		if s_text:
+			season = "spring" if s_text == "summer" else s_text
+		if y_text:
+			year = y_text
+		if b_text:
+			block = b_text
+		if s_text or y_text or b_text:
+			break
+
+	return CalendarToolArgs(
+		query_type="deadline",
+		season=season,
+		year=year,
+		block_number=block,
+		specific_deadline=specific_deadline,
+		timezone=user_timezone,
+	)
+
+
 async def detect_calendar_intent_via_llm(
 	message: str,
 	user_timezone: str = "UTC",
@@ -107,6 +174,7 @@ async def detect_calendar_intent_via_llm(
 		- both None if the message is clearly not calendar-related
 	"""
 	tool_def = get_calendar_tool_definition()
+	explicit_deadline = normalize_deadline_term(message)
 
 	current_ctx = _current_term_context(user_timezone)
 	prompt = _ROUTER_SYSTEM_PROMPT_TEMPLATE.format(current_context=current_ctx)
@@ -138,11 +206,27 @@ async def detect_calendar_intent_via_llm(
 			fn = getattr(tc, "function", None) or tc.get("function", {})
 			args_str = getattr(fn, "arguments", None) or fn.get("arguments", "{}")
 			args_dict = json.loads(args_str)
+			if explicit_deadline:
+				args_dict["specific_deadline"] = explicit_deadline
 			args_dict.setdefault("timezone", user_timezone)
 			return CalendarToolArgs(**args_dict), None
 		except Exception as e:
 			logger.error(f"Failed to parse calendar tool args: {e}")
 			return None, None
+
+	if explicit_deadline and (
+		_CALENDAR_CONTEXT_HINTS.search(message or "")
+		or _history_has_calendar_context(chat_history)
+	):
+		return (
+			_build_deadline_args_from_context(
+				message,
+				user_timezone,
+				chat_history,
+				explicit_deadline,
+			),
+			None,
+		)
 
 	lowered = message.lower()
 	direct_current_term_patterns = [
