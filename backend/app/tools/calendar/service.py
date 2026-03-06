@@ -199,6 +199,7 @@ def build_initial_calendar_metadata(args: CalendarToolArgs) -> dict[str, Any]:
 async def run_calendar_pipeline(
     calendar_args: Optional[CalendarToolArgs],
     shared_index: Any,
+    user_query: Optional[str] = None,
 ) -> tuple[Optional[dict], dict[str, Any]]:
     """Run calendar retrieval+extraction+card build, returning card and metadata."""
     metadata: dict[str, Any] = {}
@@ -261,7 +262,11 @@ async def run_calendar_pipeline(
             metadata["pipeline_status"] = "card_verification_failed"
             return None, metadata
 
-        card["suggestedQuestions"] = compute_suggestions(calendar_args, extracted)
+        card["suggestedQuestions"] = compute_suggestions(
+            calendar_args,
+            extracted,
+            user_query=user_query,
+        )
         metadata.update(
             {
                 "pipeline_status": "success",

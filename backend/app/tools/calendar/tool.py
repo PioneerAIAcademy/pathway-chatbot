@@ -11,6 +11,7 @@ Flow:
 
 import json
 import logging
+import re
 from datetime import date, datetime
 from typing import Optional
 
@@ -404,10 +405,27 @@ def _verify_card(card: dict) -> bool:
 def compute_suggestions(
 	args: CalendarToolArgs,
 	extracted: ExtractedCalendarData,
+	user_query: Optional[str] = None,
 ) -> list[str]:
+	def _normalize_phrase(value: str) -> str:
+		text = (value or "").lower().strip()
+		text = re.sub(r"[^a-z0-9\s]", " ", text)
+		text = re.sub(r"\b(can|could|would|you|please|me|the|a|an)\b", " ", text)
+		text = re.sub(r"\s+", " ", text).strip()
+		return text
+
+	normalized_user_query = _normalize_phrase(user_query or "")
+
 	def _add_unique(items: list[str], value: str) -> None:
 		clean = (value or "").strip()
 		if not clean:
+			return
+		normalized_clean = _normalize_phrase(clean)
+		if normalized_user_query and (
+			normalized_clean == normalized_user_query
+			or normalized_clean in normalized_user_query
+			or normalized_user_query in normalized_clean
+		):
 			return
 		lowered = clean.lower()
 		if lowered in {i.lower() for i in items}:

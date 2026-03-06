@@ -290,7 +290,9 @@ async def chat(
             """Runs concurrently with the main RAG stream."""
             nonlocal calendar_metadata
             card, pipeline_metadata = await run_calendar_pipeline(
-                calendar_args, shared_index
+                calendar_args,
+                shared_index,
+                user_query=last_message_content,
             )
             if pipeline_metadata:
                 calendar_metadata.update(pipeline_metadata)

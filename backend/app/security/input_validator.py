@@ -41,6 +41,35 @@ class InputValidator:
     
     # Maximum allowed character length based on analysis (99% of legitimate questions)
     MAX_QUESTION_LENGTH = 500
+
+    # Calendar-intent vocabulary used to bypass known Pytector false positives
+    CALENDAR_TERMS = [
+        "academic calendar",
+        "calendar",
+        "deadline",
+        "deadlines",
+        "block",
+        "term",
+        "semester",
+        "registration",
+        "priority registration",
+        "application",
+        "add course",
+        "drop",
+        "auto-drop",
+        "refund",
+        "payment",
+        "late fee",
+        "late fees",
+        "withdraw",
+        "grades",
+        "tuition discount",
+        "hold",
+        "holds",
+        "financial hold",
+        "graduation",
+        "commencement",
+    ]
     
     # Default pytector instance for reuse (lazy initialization)
     _pytector_detector = None
@@ -391,6 +420,41 @@ class InputValidator:
             return RiskLevel.MEDIUM
         else:
             return RiskLevel.LOW
+
+    @classmethod
+    def _looks_like_calendar_request(cls, input_text: str) -> bool:
+        text = (input_text or "").lower()
+        if not text.strip():
+            return False
+        return any(term in text for term in cls.CALENDAR_TERMS)
+
+    @classmethod
+    def _is_pytector_only_medium_hit(
+        cls,
+        risk_level: RiskLevel,
+        risk_score: int,
+        details: Dict[str, Any],
+    ) -> bool:
+        patterns = details.get("detected_patterns", [])
+        if risk_level != RiskLevel.MEDIUM:
+            return False
+        if risk_score != 4:
+            return False
+        if len(patterns) != 1:
+            return False
+        return str(patterns[0]).startswith("pytector_ml_detection")
+
+    @classmethod
+    def _allow_calendar_false_positive(
+        cls,
+        input_text: str,
+        risk_level: RiskLevel,
+        risk_score: int,
+        details: Dict[str, Any],
+    ) -> bool:
+        return cls._is_pytector_only_medium_hit(
+            risk_level, risk_score, details
+        ) and cls._looks_like_calendar_request(input_text)
     
     @classmethod
     async def validate_input_security_async(cls, input_text: str) -> Tuple[bool, str, Dict[str, Any]]:
@@ -427,6 +491,20 @@ class InputValidator:
         if is_suspicious:
             details["risk_level"] = risk_level.value
             details["is_suspicious"] = True
+
+            # Allowlist only narrow false-positive class:
+            # pytector-only medium hit on clear calendar phrasing.
+            if cls._allow_calendar_false_positive(
+                input_text, risk_level, risk_score, details
+            ):
+                details["is_suspicious"] = False
+                details["risk_level"] = "LOW"
+                details["reason"] = "calendar_pytector_false_positive_override"
+                logger.info(
+                    "Security override applied for likely calendar request "
+                    "(pytector-only medium false positive)"
+                )
+                return False, "", details
             
             # Block MEDIUM and CRITICAL risk inputs
             if risk_level in [RiskLevel.MEDIUM, RiskLevel.CRITICAL]:
@@ -477,6 +555,20 @@ class InputValidator:
         if is_suspicious:
             details["risk_level"] = risk_level.value
             details["is_suspicious"] = True
+
+            # Allowlist only narrow false-positive class:
+            # pytector-only medium hit on clear calendar phrasing.
+            if cls._allow_calendar_false_positive(
+                input_text, risk_level, risk_score, details
+            ):
+                details["is_suspicious"] = False
+                details["risk_level"] = "LOW"
+                details["reason"] = "calendar_pytector_false_positive_override"
+                logger.info(
+                    "Security override applied for likely calendar request "
+                    "(pytector-only medium false positive)"
+                )
+                return False, "", details
             
             # Block MEDIUM and CRITICAL risk inputs
             if risk_level in [RiskLevel.MEDIUM, RiskLevel.CRITICAL]:
