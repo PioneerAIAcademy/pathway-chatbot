@@ -669,7 +669,7 @@ export function CalendarCard({
               content: "Yes, list the dates in text format",
             } as Message)
           }
-          className="text-[11px] sm:text-[11.5px] text-gray-400 dark:text-gray-500 hover:text-[hsl(var(--header-bg))] dark:hover:text-amber-300 transition-colors cursor-pointer text-left"
+          className="self-start text-[11px] sm:text-[11.5px] text-gray-400 dark:text-gray-500 hover:text-[hsl(var(--header-bg))] dark:hover:text-amber-300 transition-colors cursor-pointer text-left"
         >
           {cardData.textFormatOffer}
         </button>

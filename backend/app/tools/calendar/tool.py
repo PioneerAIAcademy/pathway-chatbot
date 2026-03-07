@@ -560,15 +560,25 @@ def compute_suggestions(
 	def _event_focus_question(event_name: str, event_date: str) -> str:
 		event_lower = (event_name or "").lower()
 		if "registration" in event_lower:
-			return f"How do I prepare for {event_name}?"
+			if any(token in event_lower for token in ("open", "opens", "opening")):
+				return "How do I prepare for registration?"
+			if "deadline" in event_lower:
+				return "How do I prepare for the registration deadline?"
+			return f"What should I know about {event_name}?"
 		if "payment" in event_lower or "fees" in event_lower:
 			return f"What if I miss {event_name}?"
 		if "drop" in event_lower or "withdraw" in event_lower:
 			return f"What are my options after {event_name}?"
+		if "grade" in event_lower and "available" in event_lower:
+			return "When and where can I view final grades?"
 		if "grade" in event_lower:
 			return f"How should I prepare for {event_name}?"
 		if "graduation" in event_lower or "commencement" in event_lower:
 			return f"How do I get ready for {event_name}?"
+		if any(token in event_lower for token in ("opens", "open", "opening", "begins", "begin", "starts", "start", "ends", "end", "closes", "close")):
+			return f"What should I know before {event_name}?"
+		if "available" in event_lower:
+			return f"When does {event_name} happen?"
 		return f"What should I know about {event_name}?"
 
 	suggestions: list[str] = []

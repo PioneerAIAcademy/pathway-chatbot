@@ -100,10 +100,29 @@ const preprocessCitations = (content: string, sources?: SourceData) => {
   return content;
 };
 
+const promoteCalendarSubheaders = (content: string) => {
+  return content
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+
+      if (trimmed.startsWith("#")) {
+        return line;
+      }
+
+      if (/^Block\/Term\s+\d+\s*$/i.test(trimmed)) {
+        return `### ${trimmed}`;
+      }
+
+      return line;
+    })
+    .join("\n");
+};
+
 const preprocessContent = (content: string, sources?: SourceData) => {
   return preprocessCitations(
     preprocessFootnoteCitations(
-      preprocessMedia(preprocessLaTeX(content)),
+      promoteCalendarSubheaders(preprocessMedia(preprocessLaTeX(content))),
       sources,
     ),
     sources,
@@ -311,19 +330,23 @@ export default function Markdown({
       rehypePlugins={[rehypeKatex as any]}
       components={{
         p({ children }) {
-          return <p className="mb-2 last:mb-0">{children}</p>;
+          return (
+            <p className="mb-2 last:mb-0">
+              {highlightDatesInChildren(children, normalizedDatePhrases)}
+            </p>
+          );
         },
         h2({ children }) {
           return (
             <h2 className="mt-5 mb-2 text-[22px] sm:text-[24px] leading-[1.2] font-semibold tracking-[-0.2px]">
-              {children}
+              {highlightDatesInChildren(children, normalizedDatePhrases)}
             </h2>
           );
         },
         h3({ children }) {
           return (
             <h3 className="mt-4 mb-2 text-[20px] sm:text-[22px] leading-[1.25] font-semibold tracking-[-0.2px]">
-              {children}
+              {highlightDatesInChildren(children, normalizedDatePhrases)}
             </h3>
           );
         },
