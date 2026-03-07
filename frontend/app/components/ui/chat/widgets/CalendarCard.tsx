@@ -101,7 +101,7 @@ function CardIcon({ type }: { type: CalendarCardData["type"] }) {
 function StatusBadge({ status }: { status: CalendarCardData["status"] }) {
   if (status === "active") {
     return (
-      <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-green-600 dark:text-green-400 bg-green-500/10 dark:bg-green-400/10 px-2.5 py-1 rounded-full whitespace-nowrap">
+      <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-semibold text-green-600 dark:text-green-400 bg-green-500/10 dark:bg-green-400/10 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full whitespace-nowrap">
         <span
           className={`${styles.pulseDot} bg-green-500 dark:bg-green-400`}
         />
@@ -111,7 +111,7 @@ function StatusBadge({ status }: { status: CalendarCardData["status"] }) {
   }
   if (status === "upcoming") {
     return (
-      <span className="text-[11px] font-semibold text-blue-500 dark:text-blue-400 bg-blue-500/8 dark:bg-blue-400/8 px-2.5 py-1 rounded-full whitespace-nowrap">
+      <span className="text-[10px] sm:text-[11px] font-semibold text-blue-500 dark:text-blue-400 bg-blue-500/8 dark:bg-blue-400/8 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full whitespace-nowrap">
         Upcoming
       </span>
     );
@@ -129,18 +129,23 @@ function SpotlightBanner({
   const eventDate = new Date(spotlight.date + "T00:00:00");
   const monthStr = eventDate.toLocaleDateString("en-US", { month: "short" });
   const dayStr = eventDate.getDate();
+  const now = new Date();
+  const isToday =
+    eventDate.getFullYear() === now.getFullYear() &&
+    eventDate.getMonth() === now.getMonth() &&
+    eventDate.getDate() === now.getDate();
 
   return (
     <div
-      className={`p-4 rounded-xl flex items-center gap-4 border ${colors.bg} ${colors.border}`}
+      className={`p-3 sm:p-4 rounded-xl flex items-start sm:items-center gap-3 sm:gap-4 border ${colors.bg} ${colors.border}`}
     >
       <div
-        className={`text-center min-w-[54px] shrink-0 ${colors.dateText}`}
+        className={`text-center min-w-[44px] sm:min-w-[54px] shrink-0 ${colors.dateText}`}
       >
-        <div className="text-[11px] font-semibold uppercase tracking-[0.5px] opacity-75">
+        <div className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-[0.5px] opacity-75">
           {monthStr}
         </div>
-        <div className="text-[30px] font-extrabold leading-none tracking-[-1px]">
+        <div className="text-[24px] sm:text-[30px] font-extrabold leading-none tracking-[-1px]">
           {dayStr}
         </div>
       </div>
@@ -149,18 +154,18 @@ function SpotlightBanner({
           {spotlight.urgency === "urgent" && (
             <AlertCircle className="w-3.5 h-3.5 text-red-500 dark:text-red-400 shrink-0" />
           )}
-          <div className="text-sm font-semibold text-[#3D3D3A] dark:text-[#e6edf3] leading-snug">
-            {spotlight.urgency === "urgent" ? "Today: " : ""}
+          <div className="text-[13px] sm:text-sm font-semibold text-[#3D3D3A] dark:text-[#e6edf3] leading-snug">
+            {isToday ? "Today: " : ""}
             {spotlight.title}
           </div>
         </div>
         {spotlight.description && (
-          <div className="text-[12.5px] text-gray-500 dark:text-gray-400 leading-relaxed mt-0.5">
+          <div className="text-[11.5px] sm:text-[12.5px] text-gray-500 dark:text-gray-400 leading-relaxed mt-0.5">
             {spotlight.description}
           </div>
         )}
         <div
-          className={`inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded mt-1.5 ${colors.countdownBg} ${colors.countdownText}`}
+          className={`inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-semibold px-1.5 sm:px-2 py-0.5 rounded mt-1.5 ${colors.countdownBg} ${colors.countdownText}`}
         >
           <Clock className="w-3 h-3" />
           {spotlight.countdown}
@@ -184,25 +189,25 @@ function TimelineRow({
     // Skeleton content — same layout, shimmer placeholders
     return (
       <div
-        className={`${styles.skeletonRow} flex items-start px-3 py-2.5 rounded-lg gap-3`}
+        className={`${styles.skeletonRow} flex items-start px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-lg gap-2 sm:gap-3`}
         style={{ "--row-index": index } as React.CSSProperties}
       >
         <div
-          className={`${styles.shimmer} w-[42px] h-10 rounded bg-gray-200/60 dark:bg-gray-700/30`}
+          className={`${styles.shimmer} w-9 sm:w-[42px] h-9 sm:h-10 rounded bg-gray-200/60 dark:bg-gray-700/30`}
         />
         <div
-          className={`${styles.skeletonGuide} w-[3px] h-7 rounded-sm shrink-0 mt-1 bg-gray-200/60 dark:bg-gray-700/30`}
+          className={`${styles.skeletonGuide} w-[2.5px] sm:w-[3px] h-6 sm:h-7 rounded-sm shrink-0 mt-1 bg-gray-200/60 dark:bg-gray-700/30`}
         />
-        <div className="flex-1 min-w-0 pt-1 space-y-1.5">
+        <div className="flex-1 min-w-0 pt-0.5 sm:pt-1 space-y-1.5">
           <div
-            className={`${styles.skeletonLineMain} ${styles.shimmer} h-3.5 rounded bg-gray-200/60 dark:bg-gray-700/30`}
+            className={`${styles.skeletonLineMain} ${styles.shimmer} h-3 sm:h-3.5 rounded bg-gray-200/60 dark:bg-gray-700/30`}
           />
           <div
             className={`${styles.skeletonLineSub} ${styles.shimmer} h-2.5 w-3/4 rounded bg-gray-200/60 dark:bg-gray-700/30`}
           />
         </div>
         <div
-          className={`${styles.shimmer} w-14 h-5 rounded bg-gray-200/60 dark:bg-gray-700/30 mt-1`}
+          className={`${styles.shimmer} w-12 sm:w-14 h-5 rounded bg-gray-200/60 dark:bg-gray-700/30 mt-1`}
         />
       </div>
     );
@@ -217,20 +222,20 @@ function TimelineRow({
 
   return (
     <div
-      className={`${styles.row} flex items-start px-3 py-2.5 rounded-lg gap-3 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors`}
+      className={`${styles.row} flex items-start px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-lg gap-2 sm:gap-3 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors`}
       style={{ "--row-index": index } as React.CSSProperties}
     >
       {/* Mini date */}
       <div
-        className={`${styles.rowContentReveal} w-[42px] text-center shrink-0 pt-0.5`}
+        className={`${styles.rowContentReveal} w-9 sm:w-[42px] text-center shrink-0 pt-0.5`}
       >
         <div
-          className={`text-[9px] font-bold uppercase tracking-[0.5px] ${isPast ? "text-gray-400 dark:text-gray-600" : "text-gray-500 dark:text-gray-500"}`}
+          className={`text-[8.5px] sm:text-[9px] font-bold uppercase tracking-[0.5px] ${isPast ? "text-gray-400 dark:text-gray-600" : "text-gray-500 dark:text-gray-500"}`}
         >
           {monthStr}
         </div>
         <div
-          className={`text-[19px] font-bold leading-tight ${isPast ? "text-gray-400 dark:text-gray-600" : "text-[#3D3D3A] dark:text-[#e6edf3]"}`}
+          className={`text-[17px] sm:text-[19px] font-bold leading-tight ${isPast ? "text-gray-400 dark:text-gray-600" : "text-[#3D3D3A] dark:text-[#e6edf3]"}`}
         >
           {dayStr}
         </div>
@@ -238,14 +243,14 @@ function TimelineRow({
 
       {/* Colored pip */}
       <div
-        className={`${styles.pip} w-[3px] rounded-sm shrink-0 mt-1 ${hasDescription ? "h-9" : "h-7"} ${statusPipClass[event.status] || statusPipClass.upcoming}`}
+        className={`${styles.pip} w-[2.5px] sm:w-[3px] rounded-sm shrink-0 mt-1 ${hasDescription ? "h-8 sm:h-9" : "h-6 sm:h-7"} ${statusPipClass[event.status] || statusPipClass.upcoming}`}
         style={{ "--row-index": index } as React.CSSProperties}
       />
 
       {/* Event name + description */}
       <div className={`${styles.rowContentReveal} flex-1 min-w-0 pt-0.5`}>
         <div
-          className={`text-[13.5px] font-medium leading-snug ${
+          className={`text-[12.5px] sm:text-[13.5px] font-medium leading-snug ${
             isPast
               ? `text-gray-400 dark:text-gray-600 ${styles.pastEvent}`
               : "text-[#3D3D3A] dark:text-[#e6edf3]"
@@ -254,7 +259,7 @@ function TimelineRow({
           {event.name}
         </div>
         {hasDescription && (
-          <div className="text-[11px] text-gray-500 dark:text-[#6e7681] leading-snug mt-px">
+          <div className="text-[10.5px] sm:text-[11px] text-gray-500 dark:text-[#6e7681] leading-snug mt-px">
             {event.description}
           </div>
         )}
@@ -262,7 +267,7 @@ function TimelineRow({
 
       {/* Status pill */}
       <span
-        className={`${styles.rowContentReveal} text-[10.5px] font-semibold px-2 py-0.5 rounded shrink-0 whitespace-nowrap mt-1 ${statusPillClass[event.status] || statusPillClass.upcoming}`}
+        className={`${styles.rowContentReveal} text-[10px] sm:text-[10.5px] font-semibold px-1.5 sm:px-2 py-0.5 rounded shrink-0 max-w-[84px] sm:max-w-none whitespace-normal sm:whitespace-nowrap text-right leading-tight mt-0.5 sm:mt-1 ${statusPillClass[event.status] || statusPillClass.upcoming}`}
       >
         {event.countdown || event.status}
       </span>
@@ -273,7 +278,7 @@ function TimelineRow({
 // --- Section Label ---
 function SectionLabel({ label }: { label: string }) {
   return (
-    <div className="text-[10px] font-bold text-gray-400 dark:text-gray-600 uppercase tracking-widest px-3 pt-2.5 pb-1">
+    <div className="text-[9px] sm:text-[10px] font-bold text-gray-400 dark:text-gray-600 uppercase tracking-widest px-2.5 sm:px-3 pt-2 sm:pt-2.5 pb-1">
       {label}
     </div>
   );
@@ -413,7 +418,7 @@ export function CalendarCard({
     <div className="flex flex-col gap-3">
       {/* The card — never unmounts, content transitions in-place */}
       <div
-        className={`${styles.card} ${mounted ? styles.ready : ""} bg-[#f5f4f0] dark:bg-[#161b22] rounded-2xl overflow-hidden`}
+        className={`${styles.card} ${mounted ? styles.ready : ""} bg-[#f5f4f0] dark:bg-[#161b22] rounded-2xl overflow-hidden max-w-full`}
       >
         {/* Card frame — 6 lines draw the border from center outward */}
         <div className={styles.cardFrame} aria-hidden="true">
@@ -426,37 +431,43 @@ export function CalendarCard({
         </div>
 
         {/* Header — container always present, content swaps in-place */}
-        <div className="px-5 pt-4 pb-3 flex items-center justify-between gap-3">
+        <div className="px-3 sm:px-5 pt-3 sm:pt-4 pb-2.5 sm:pb-3 flex items-center justify-between gap-2.5 sm:gap-3">
           {headerLoaded ? (
             <div
-              className={`${styles.headerReveal} flex items-center justify-between gap-3 w-full`}
+              className={`${styles.headerReveal} w-full min-w-0`}
             >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[hsl(var(--header-bg))] to-amber-500 flex items-center justify-center shadow-[0_4px_12px_rgba(255,195,40,0.18)] shrink-0">
+              <div className="flex items-start gap-2 sm:gap-3 min-w-0">
+                <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-[hsl(var(--header-bg))] to-amber-500 flex items-center justify-center shadow-[0_4px_12px_rgba(255,195,40,0.18)] shrink-0 mt-0.5">
                   <CardIcon type={cardData.type ?? "block"} />
                 </div>
-                <div>
-                  <div className="text-base font-bold leading-[1.15] tracking-[-0.3px] text-[#3D3D3A] dark:text-[#e6edf3]">
-                    {cardData.title}
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-1.5 sm:gap-2 min-w-0">
+                    <div className="text-[21px] sm:text-base font-bold leading-[1.08] sm:leading-[1.15] tracking-[-0.3px] text-[#3D3D3A] dark:text-[#e6edf3] break-words min-w-0 pr-1">
+                      {cardData.title}
+                    </div>
+                    <div className="shrink-0 pt-0.5">
+                      <StatusBadge status={cardData.status ?? "upcoming"} />
+                    </div>
                   </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-500 mt-px">
+
+                  <div className="text-[11px] sm:text-xs text-gray-500 dark:text-gray-500 mt-0.5 leading-tight pr-1">
                     {cardData.subtitle}
                   </div>
                 </div>
               </div>
-              <StatusBadge status={cardData.status ?? "upcoming"} />
             </div>
           ) : (
             <div className="flex items-center gap-3 w-full">
               <div
-                className={`${styles.shimmer} w-10 h-10 rounded-xl bg-gray-200 dark:bg-gray-700`}
+                className={`${styles.shimmer} w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gray-200 dark:bg-gray-700`}
               />
               <div className="flex-1 space-y-2">
                 <div
-                  className={`${styles.shimmer} h-4 w-48 rounded bg-gray-200 dark:bg-gray-700`}
+                  className={`${styles.shimmer} h-4 w-40 sm:w-48 rounded bg-gray-200 dark:bg-gray-700`}
                 />
                 <div
-                  className={`${styles.shimmer} h-3 w-32 rounded bg-gray-200 dark:bg-gray-700`}
+                  className={`${styles.shimmer} h-3 w-24 sm:w-32 rounded bg-gray-200 dark:bg-gray-700`}
                 />
               </div>
             </div>
@@ -465,38 +476,42 @@ export function CalendarCard({
 
         {/* Spotlight — show shimmer while loading, real content when ready, nothing if no spotlight */}
         {!dataReady ? (
-          <div className="mx-3.5 mb-3.5">
+          <div className="mx-2.5 sm:mx-3.5 mb-2.5 sm:mb-3.5">
             <div
               className={`${styles.shimmer} h-20 rounded-xl bg-gray-200/50 dark:bg-gray-700/30`}
             />
           </div>
         ) : spotlightLoaded && cardData.spotlight ? (
-          <div className={`${styles.sectionReveal} mx-3.5 mb-3.5`}>
+          <div className={`${styles.sectionReveal} mx-2.5 sm:mx-3.5 mb-2.5 sm:mb-3.5`}>
             <SpotlightBanner spotlight={cardData.spotlight} />
           </div>
         ) : null}
 
         {/* Tabs (semester view) — mounts when ready */}
         {tabsLoaded && cardData.tabs && cardData.tabs.length > 0 && (
-          <div className={`${styles.tabs} flex gap-0.5 px-4 mb-1`}>
-            {cardData.tabs.map((tab, i) => (
-              <button
-                key={tab.label}
-                onClick={() => setActiveTab(i)}
-                className={`text-[11.5px] font-medium px-3.5 py-1.5 rounded-t-lg border-b-2 transition-colors cursor-pointer ${
-                  i === activeTab
-                    ? `${styles.tabActive} text-[hsl(var(--header-bg))] dark:text-amber-300 border-[hsl(var(--header-bg))] dark:border-amber-300 bg-[hsl(var(--header-bg))]/5 dark:bg-amber-400/5 font-semibold`
-                    : "text-gray-400 dark:text-gray-600 border-transparent hover:text-gray-500 dark:hover:text-gray-500 hover:bg-black/[0.02] dark:hover:bg-white/[0.02]"
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+          <div
+            className={`${styles.tabs} ${styles.hideScrollbar} px-2.5 sm:px-4 mb-1 overflow-x-auto`}
+          >
+            <div className="inline-flex gap-0.5 min-w-max">
+              {cardData.tabs.map((tab, i) => (
+                <button
+                  key={tab.label}
+                  onClick={() => setActiveTab(i)}
+                  className={`text-[10.5px] sm:text-[11.5px] font-medium px-2.5 sm:px-3.5 py-1 sm:py-1.5 rounded-t-lg border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
+                    i === activeTab
+                      ? `${styles.tabActive} text-[hsl(var(--header-bg))] dark:text-amber-300 border-[hsl(var(--header-bg))] dark:border-amber-300 bg-[hsl(var(--header-bg))]/5 dark:bg-amber-400/5 font-semibold`
+                      : "text-gray-400 dark:text-gray-600 border-transparent hover:text-gray-500 dark:hover:text-gray-500 hover:bg-black/[0.02] dark:hover:bg-white/[0.02]"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
         {/* Timeline — always present, rows fill content in-place */}
-        <div className="px-2.5 pb-1.5">
+        <div className="px-2 sm:px-2.5 pb-1.5">
           {timelineStarted
             ? // Real rows — with section labels and per-row loading
               sections.map((section) => (
@@ -534,21 +549,21 @@ export function CalendarCard({
         {/* Footer */}
         {showFooter && cardData.sourceUrl && (
           <div
-            className={`${styles.footer} px-4 py-3 border-t border-gray-200/60 dark:border-white/[0.06] flex items-center justify-between flex-wrap gap-2`}
+            className={`${styles.footer} px-3 sm:px-4 py-2.5 sm:py-3 border-t border-gray-200/60 dark:border-white/[0.06] flex flex-col items-start sm:flex-row sm:items-center sm:justify-between gap-2`}
           >
             <div className="flex gap-2">
               <a
                 href={cardData.sourceUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-[12.5px] font-semibold text-[#002E5D] dark:text-[#002E5D] bg-[hsl(var(--header-bg))] hover:bg-amber-300 dark:hover:bg-amber-300 px-4 py-1.5 rounded-lg transition-all hover:-translate-y-px hover:shadow-[0_4px_12px_rgba(255,195,40,0.25)]"
+                className="inline-flex items-center gap-1.5 text-[11.5px] sm:text-[12.5px] font-semibold text-[#002E5D] dark:text-[#002E5D] bg-[hsl(var(--header-bg))] hover:bg-amber-300 dark:hover:bg-amber-300 px-3 sm:px-4 py-1.5 rounded-lg transition-all hover:-translate-y-px hover:shadow-[0_4px_12px_rgba(255,195,40,0.25)]"
               >
                 <Calendar className="w-3.5 h-3.5" />
                 Full Calendar
                 <ExternalLink className="w-3 h-3" />
               </a>
             </div>
-            <div className="text-[10.5px] text-gray-400 dark:text-gray-600">
+            <div className="text-[10px] sm:text-[10.5px] text-gray-400 dark:text-gray-600">
               Source:{" "}
               <a
                 href={cardData.sourceUrl}
@@ -564,8 +579,8 @@ export function CalendarCard({
 
         {/* Footnote */}
         {showFooter && cardData.footnote && (
-          <div className="px-4 pb-3 -mt-1">
-            <p className="text-[11.5px] text-gray-400 dark:text-gray-500 leading-relaxed">
+          <div className="px-3 sm:px-4 pb-3 -mt-1">
+            <p className="text-[11px] sm:text-[11.5px] text-gray-400 dark:text-gray-500 leading-relaxed">
               <strong className="font-semibold">Note:</strong>{" "}
               {cardData.footnote}
             </p>
@@ -584,7 +599,7 @@ export function CalendarCard({
                 onClick={() =>
                   append?.({ role: "user", content: q } as Message)
                 }
-                className={`text-[11.5px] font-medium text-gray-500 dark:text-gray-500 px-3 py-1.5 rounded-md bg-[#f5f4f0] dark:bg-[#161b22] border border-gray-200/60 dark:border-white/[0.06] cursor-pointer transition-all hover:text-[hsl(var(--header-bg))] dark:hover:text-amber-300 hover:border-[hsl(var(--header-bg))]/15 dark:hover:border-amber-400/15 hover:bg-[hsl(var(--header-bg))]/5 dark:hover:bg-amber-400/5 text-left ${i === 1 ? "hidden sm:inline-block" : "inline-block"}`}
+                className={`text-[11px] sm:text-[11.5px] font-medium text-gray-500 dark:text-gray-500 px-2.5 sm:px-3 py-1.5 rounded-md bg-[#f5f4f0] dark:bg-[#161b22] border border-gray-200/60 dark:border-white/[0.06] cursor-pointer transition-all hover:text-[hsl(var(--header-bg))] dark:hover:text-amber-300 hover:border-[hsl(var(--header-bg))]/15 dark:hover:border-amber-400/15 hover:bg-[hsl(var(--header-bg))]/5 dark:hover:bg-amber-400/5 text-left ${i === 1 ? "hidden sm:inline-block" : "inline-block"}`}
               >
                 {q}
               </button>
@@ -601,7 +616,7 @@ export function CalendarCard({
               content: "Yes, list the dates in text format",
             } as Message)
           }
-          className="text-[11.5px] text-gray-400 dark:text-gray-500 hover:text-[hsl(var(--header-bg))] dark:hover:text-amber-300 transition-colors cursor-pointer text-left"
+          className="text-[11px] sm:text-[11.5px] text-gray-400 dark:text-gray-500 hover:text-[hsl(var(--header-bg))] dark:hover:text-amber-300 transition-colors cursor-pointer text-left"
         >
           {cardData.textFormatOffer}
         </button>

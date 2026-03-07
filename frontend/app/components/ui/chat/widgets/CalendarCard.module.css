@@ -331,6 +331,15 @@
   animation: fadeSlideUp 0.3s ease-out 0.15s forwards;
 }
 
+.hideScrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.hideScrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* --- Shared keyframe --- */
 @keyframes fadeSlideUp {
   from {
@@ -419,6 +428,14 @@
   }
   to {
     transform: translateX(100%);
+  }
+}
+
+@media (max-width: 420px) {
+  .row::after,
+  .skeletonRow::after {
+    left: 46px;
+    right: 10px;
   }
 }
 

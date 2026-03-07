@@ -124,9 +124,9 @@ const DATE_CHIP_CLASSNAME =
   "inline-block align-baseline border rounded-[5px]";
 
 const DATE_CHIP_STYLE: CSSProperties = {
-  background: "rgba(163, 52, 34, 0.21)",
-  color: "#cc7265",
-  borderColor: "rgba(163, 52, 34, 0.40)",
+  background: "hsl(var(--chat-bg))",
+  color: "hsl(var(--date-chip-text))",
+  borderColor: "var(--date-chip-border)",
   borderWidth: "1px",
   borderStyle: "solid",
   borderRadius: "5px",
@@ -136,7 +136,7 @@ const DATE_CHIP_STYLE: CSSProperties = {
   fontSize: "13.2px",
   lineHeight: 1.2,
   letterSpacing: "0.01em",
-  fontWeight: 400,
+  fontWeight: 800,
   whiteSpace: "nowrap",
 };
 
