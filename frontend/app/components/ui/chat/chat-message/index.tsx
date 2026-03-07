@@ -8,6 +8,7 @@ import {
   CalendarCardData,
   CalendarCardState,
   ChatHandler,
+  DateSpansData,
   DocumentFileData,
   EventData,
   ImageData,
@@ -208,6 +209,10 @@ function ChatMessageContent({
     annotations,
     MessageAnnotationType.USER_LANGUAGE,
   );
+  const dateSpansData = getAnnotationData<DateSpansData>(
+    annotations,
+    MessageAnnotationType.DATE_SPANS,
+  );
 
   const contents: ContentDisplayConfig[] = [
     {
@@ -238,7 +243,11 @@ function ChatMessageContent({
     {
       order: 0,
       component: shouldHideMarkdownForCalendarError ? null : (
-        <Markdown content={message.content} sources={sourceData[0]} />
+        <Markdown
+          content={message.content}
+          sources={sourceData[0]}
+          dateSpans={dateSpansData[0]}
+        />
       ),
     },
     {

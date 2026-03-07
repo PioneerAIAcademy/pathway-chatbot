@@ -131,9 +131,10 @@ async def query_pinecone_for_calendar(args: CalendarToolArgs, retriever) -> list
 
 
 _MAX_CONTEXT_CHARS = 4000
-_MAX_CONTEXT_CHARS_FULL_YEAR = 18000
-_MAX_CONTEXT_NODES_FULL_YEAR = 24
+_MAX_CONTEXT_CHARS_FULL_YEAR = 14000
+_MAX_CONTEXT_NODES_FULL_YEAR = 16
 _MAX_EXTRACTION_ATTEMPTS = 2
+_MAX_EXTRACTION_ATTEMPTS_FULL_YEAR = 1
 
 _EXTRACTION_SYSTEM = (
 	"You extract structured academic calendar data from documents. "
@@ -171,6 +172,11 @@ async def extract_structured_data(
 	scope = (getattr(args, "scope", "term") or "term").lower()
 	max_chars = _MAX_CONTEXT_CHARS_FULL_YEAR if scope == "full_year" else _MAX_CONTEXT_CHARS
 	max_nodes = _MAX_CONTEXT_NODES_FULL_YEAR if scope == "full_year" else 10
+	max_attempts = (
+		_MAX_EXTRACTION_ATTEMPTS_FULL_YEAR
+		if scope == "full_year"
+		else _MAX_EXTRACTION_ATTEMPTS
+	)
 
 	context_parts: list[str] = []
 	total_chars = 0
@@ -198,9 +204,9 @@ async def extract_structured_data(
 	user_content = f"Extract calendar data for: {query_desc}\n\nDocuments:\n{context}"
 	last_error: Optional[str] = None
 
-	for attempt in range(1, _MAX_EXTRACTION_ATTEMPTS + 1):
+	for attempt in range(1, max_attempts + 1):
 		try:
-			logger.info(f"Extraction attempt {attempt}/{_MAX_EXTRACTION_ATTEMPTS}")
+			logger.info(f"Extraction attempt {attempt}/{max_attempts}")
 			response = await Settings.llm.achat(
 				messages=[
 					ChatMessage(role=MessageRole.SYSTEM, content=_EXTRACTION_SYSTEM),
@@ -223,7 +229,7 @@ async def extract_structured_data(
 				last_error = "extraction returned 0 events"
 				logger.warning(
 					f"Attempt {attempt}: {last_error} — "
-					f"{'retrying' if attempt < _MAX_EXTRACTION_ATTEMPTS else 'giving up'}"
+					f"{'retrying' if attempt < max_attempts else 'giving up'}"
 				)
 				continue
 
@@ -236,16 +242,16 @@ async def extract_structured_data(
 			last_error = f"JSON parse failed: {e}"
 			logger.warning(
 				f"Attempt {attempt}: {last_error} — "
-				f"{'retrying' if attempt < _MAX_EXTRACTION_ATTEMPTS else 'giving up'}"
+				f"{'retrying' if attempt < max_attempts else 'giving up'}"
 			)
 		except Exception as e:
 			last_error = f"extraction error: {e}"
 			logger.error(
 				f"Attempt {attempt}: {last_error} — "
-				f"{'retrying' if attempt < _MAX_EXTRACTION_ATTEMPTS else 'giving up'}"
+				f"{'retrying' if attempt < max_attempts else 'giving up'}"
 			)
 
-	logger.error(f"All {_MAX_EXTRACTION_ATTEMPTS} extraction attempts failed. Last: {last_error}")
+	logger.error(f"All {max_attempts} extraction attempts failed. Last: {last_error}")
 	return None
 
 

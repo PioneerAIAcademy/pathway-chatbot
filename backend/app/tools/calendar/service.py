@@ -55,6 +55,27 @@ def _merge_nodes(primary: list[Any], extra: list[Any], max_nodes: int = 18) -> l
     return merged
 
 
+def _prioritize_nodes_for_year(
+    nodes: list[Any],
+    year: int,
+    *,
+    max_nodes: int = 12,
+) -> list[Any]:
+    year_str = str(year)
+    matching: list[Any] = []
+    non_matching: list[Any] = []
+
+    for node in nodes or []:
+        text = getattr(node, "text", "") or ""
+        if year_str in text:
+            matching.append(node)
+        else:
+            non_matching.append(node)
+
+    prioritized = [*matching, *non_matching]
+    return prioritized[:max_nodes]
+
+
 async def localize_calendar_intro(
     intro_text: str,
     user_language: Optional[str],
@@ -517,6 +538,15 @@ async def run_calendar_pipeline(
             if expanded_nodes:
                 nodes = _merge_nodes(nodes, expanded_nodes, max_nodes=24)
                 metadata["retrieval_mode"] = "full_year_expanded"
+
+            nodes = _prioritize_nodes_for_year(
+                nodes,
+                calendar_args.year,
+                max_nodes=12,
+            )
+            metadata["retrieval_mode"] = (
+                f"{metadata.get('retrieval_mode', 'full_year')}+year_prioritized"
+            )
 
         if not nodes:
             logger.warning("Calendar pipeline: no Pinecone nodes returned")

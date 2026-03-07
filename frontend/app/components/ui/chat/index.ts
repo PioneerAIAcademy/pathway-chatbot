@@ -19,6 +19,7 @@ export enum MessageAnnotationType {
   CALENDAR_TIMELINE = "calendar_timeline",
   CALENDAR_FOOTER = "calendar_footer",
   CALENDAR_ERROR = "calendar_error",
+  DATE_SPANS = "date_spans",
   SUGGESTED_QUESTIONS = "suggested_questions",
   LANGFUSE_TRACE_ID = "langfuse_trace_id",
   USER_LANGUAGE = "user_language",
@@ -137,6 +138,11 @@ export type UserLanguageData = {
   language: string;
 };
 
+export type DateSpansData = {
+  phrases: string[];
+  language?: string;
+};
+
 export type AnnotationData =
   | ImageData
   | DocumentFileData
@@ -144,6 +150,7 @@ export type AnnotationData =
   | EventData
   | ToolData
   | CalendarCardData
+  | DateSpansData
   | SuggestedQuestionsData
   | UserLanguageData;
 

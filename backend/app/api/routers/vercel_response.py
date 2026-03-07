@@ -14,16 +14,17 @@ from app.api.routers.events import EventCallbackHandler
 from app.api.routers.message_variations import get_retrieval_start_message
 from app.api.routers.models import ChatData, Message, SourceNodes
 from app.api.services.suggestion import NextQuestionSuggestion
+from app.utils.date_spans import extract_date_spans
 
 logger = logging.getLogger("uvicorn")
 
 # Timeout for the calendar pipeline (seconds).
 # Pipeline involves: LLM tool-choice call + Pinecone retrieval + LLM extraction.
-_CALENDAR_TIMEOUT = 25.0
+_CALENDAR_TIMEOUT = 45.0
 
 # Calendar-only requests can legitimately take longer because the entire answer
 # depends on retrieval + extraction. Keep this separate from mixed RAG path.
-_CALENDAR_ONLY_TIMEOUT = 75.0
+_CALENDAR_ONLY_TIMEOUT = 120.0
 
 # Emit calendar patches after this many text tokens have streamed
 _MIN_TOKENS_BEFORE_CALENDAR = 15
@@ -185,6 +186,19 @@ class VercelStreamResponse(StreamingResponse):
                         }
                     )
 
+            date_spans = extract_date_spans(final_response, user_language)
+            if date_spans:
+                yield cls.convert_data(
+                    {
+                        "type": "date_spans",
+                        "data": {
+                            "phrases": date_spans,
+                            "language": user_language,
+                        },
+                        "trace_id": trace_id,
+                    }
+                )
+
             # the text_generator is the leading stream, once it's finished, also finish the event stream
             event_handler.is_done = True
 
@@ -325,6 +339,19 @@ class VercelStreamResponse(StreamingResponse):
                     yield cls.convert_text(calendar_intro)
 
                 event_handler.is_done = True
+
+                date_spans = extract_date_spans(final_response, user_language)
+                if date_spans:
+                    yield cls.convert_data(
+                        {
+                            "type": "date_spans",
+                            "data": {
+                                "phrases": date_spans,
+                                "language": user_language,
+                            },
+                            "trace_id": trace_id,
+                        }
+                    )
 
                 # Yield source nodes (empty for calendar mode)
                 yield cls.convert_data(

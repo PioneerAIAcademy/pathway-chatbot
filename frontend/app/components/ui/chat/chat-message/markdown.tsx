@@ -7,7 +7,7 @@ import remarkMath from "remark-math";
 import { ReactNode } from "react";
 import { CSSProperties } from "react";
 
-import { SourceData } from "..";
+import { DateSpansData, SourceData } from "..";
 import { SourceNumberButton } from "./chat-sources";
 import { CodeBlock } from "./codeblock";
 
@@ -114,10 +114,12 @@ const DATE_PATTERN = new RegExp(
   [
     "\\b(?:Mon(?:day)?|Tue(?:s(?:day)?)?|Wed(?:nesday)?|Thu(?:r(?:s(?:day)?)?)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?),?\\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{1,2}(?:,\\s*\\d{4})?\\b",
     "\\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{1,2}(?:,\\s*\\d{4})?\\b",
+    "\\b(?:\\p{L}+,\\s*)?\\d{1,2}\\s+de\\s+\\p{L}+\\s+de\\s+\\d{4}\\b",
+    "\\b(?:\\p{L}+,\\s*)?\\d{1,2}\\s+\\p{L}+\\s+\\d{4}\\b",
     "\\b\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}\\b",
     "\\b\\d{4}-\\d{2}-\\d{2}\\b",
   ].join("|"),
-  "g",
+  "giu",
 );
 
 const DATE_CHIP_CLASSNAME =
@@ -138,6 +140,10 @@ const DATE_CHIP_STYLE: CSSProperties = {
   letterSpacing: "0.01em",
   fontWeight: 800,
   whiteSpace: "nowrap",
+};
+
+const escapeRegExp = (value: string): string => {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 };
 
 const highlightDateText = (text: string): ReactNode[] => {
@@ -179,15 +185,67 @@ const highlightDateText = (text: string): ReactNode[] => {
   return parts;
 };
 
-const highlightDatesInChildren = (children: ReactNode): ReactNode => {
+const highlightDatePhrases = (text: string, phrases: string[]): ReactNode[] => {
+  if (!text || phrases.length === 0) {
+    return [text];
+  }
+
+  const escaped = phrases
+    .map((phrase) => phrase.trim())
+    .filter((phrase) => phrase.length > 0)
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRegExp);
+
+  if (escaped.length === 0) {
+    return [text];
+  }
+
+  const phraseRegex = new RegExp(`(${escaped.join("|")})`, "giu");
+  const segments = text.split(phraseRegex);
+  const normalizedPhraseSet = new Set(
+    phrases.map((phrase) => phrase.trim().toLocaleLowerCase()),
+  );
+
+  return segments
+    .filter((segment) => segment.length > 0)
+    .map((segment, index) => {
+      const isDate = normalizedPhraseSet.has(segment.trim().toLocaleLowerCase());
+      if (!isDate) {
+        return <span key={`date-text-${index}`}>{segment}</span>;
+      }
+
+      return (
+        <span
+          key={`date-phrase-${index}`}
+          className={DATE_CHIP_CLASSNAME}
+          style={DATE_CHIP_STYLE}
+        >
+          {segment}
+        </span>
+      );
+    });
+};
+
+const highlightDatesInChildren = (
+  children: ReactNode,
+  phrases: string[],
+): ReactNode => {
   if (typeof children === "string") {
-    return highlightDateText(children);
+    return phrases.length > 0
+      ? highlightDatePhrases(children, phrases)
+      : highlightDateText(children);
   }
 
   if (Array.isArray(children)) {
     return children.map((child, index) => {
       if (typeof child === "string") {
-        return <span key={`date-text-${index}`}>{highlightDateText(child)}</span>;
+        return (
+          <span key={`date-text-${index}`}>
+            {phrases.length > 0
+              ? highlightDatePhrases(child, phrases)
+              : highlightDateText(child)}
+          </span>
+        );
       }
       return child;
     });
@@ -199,11 +257,35 @@ const highlightDatesInChildren = (children: ReactNode): ReactNode => {
 export default function Markdown({
   content,
   sources,
+  dateSpans,
 }: {
   content: string;
   sources?: SourceData;
+  dateSpans?: DateSpansData;
 }) {
   const processedContent = preprocessContent(content, sources);
+  const normalizedDatePhrases = useMemo(() => {
+    if (!dateSpans?.phrases?.length) {
+      return [] as string[];
+    }
+
+    const seen = new Set<string>();
+    const uniquePhrases: string[] = [];
+    for (const phrase of dateSpans.phrases) {
+      const value = (phrase || "").trim();
+      if (!value) {
+        continue;
+      }
+      const key = value.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      uniquePhrases.push(value);
+    }
+
+    return uniquePhrases;
+  }, [dateSpans?.phrases]);
 
   // Create sorted sources array to match chat-sources.tsx display order
   const sortedSources = useMemo(() => 
@@ -231,8 +313,22 @@ export default function Markdown({
         p({ children }) {
           return <p className="mb-2 last:mb-0">{children}</p>;
         },
+        h2({ children }) {
+          return (
+            <h2 className="mt-5 mb-2 text-[22px] sm:text-[24px] leading-[1.2] font-semibold tracking-[-0.2px]">
+              {children}
+            </h2>
+          );
+        },
+        h3({ children }) {
+          return (
+            <h3 className="mt-4 mb-2 text-[20px] sm:text-[22px] leading-[1.25] font-semibold tracking-[-0.2px]">
+              {children}
+            </h3>
+          );
+        },
         li({ children }) {
-          return <li>{highlightDatesInChildren(children)}</li>;
+          return <li>{highlightDatesInChildren(children, normalizedDatePhrases)}</li>;
         },
         code({ node, inline, className, children, ...props }) {
           if (children.length) {
