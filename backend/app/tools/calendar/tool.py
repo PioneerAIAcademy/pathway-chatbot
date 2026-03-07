@@ -102,18 +102,75 @@ def _season_for_block(block_number: Optional[int]) -> Optional[str]:
 	return None
 
 
+def _in_block_window(event_date: date, block_number: int, year: int) -> bool:
+	if block_number == 1:
+		return (event_date.year == year - 1 and event_date.month in (11, 12)) or (
+			event_date.year == year and event_date.month in (1, 2)
+		)
+	if block_number == 2:
+		return event_date.year == year and event_date.month in (1, 2, 3, 4)
+	if block_number == 3:
+		return event_date.year == year and event_date.month in (3, 4, 5, 6)
+	if block_number == 4:
+		return event_date.year == year and event_date.month in (5, 6, 7, 8)
+	if block_number == 5:
+		return event_date.year == year and event_date.month in (7, 8, 9, 10)
+	if block_number == 6:
+		return event_date.year == year and event_date.month in (9, 10, 11, 12)
+	return event_date.year == year
+
+
+def is_block_extraction_misaligned(
+	extracted: ExtractedCalendarData,
+	args: CalendarToolArgs,
+) -> bool:
+	if args.query_type.value != "block" or not args.block_number:
+		return False
+
+	parsed_dates: list[date] = []
+	for evt in extracted.events:
+		try:
+			parsed_dates.append(date.fromisoformat(evt.date))
+		except ValueError:
+			continue
+
+	if len(parsed_dates) < 3:
+		return False
+
+	in_window = [
+		evt_date
+		for evt_date in parsed_dates
+		if _in_block_window(evt_date, args.block_number, args.year)
+	]
+	ratio = len(in_window) / max(len(parsed_dates), 1)
+	return ratio < 0.5
+
+
+def _format_range(start_date: date, end_date: date) -> str:
+	if start_date.year == end_date.year:
+		return (
+			f"{start_date.strftime('%B')} {start_date.day} – "
+			f"{end_date.strftime('%B')} {end_date.day}, {start_date.year}"
+		)
+	return (
+		f"{start_date.strftime('%B')} {start_date.day}, {start_date.year} – "
+		f"{end_date.strftime('%B')} {end_date.day}, {end_date.year}"
+	)
+
+
 async def query_pinecone_for_calendar(args: CalendarToolArgs, retriever) -> list:
 	query_parts = ["academic calendar"]
 	year_included = False
 	scope = (getattr(args, "scope", "term") or "term").lower()
+	resolved_season = args.season or _season_for_block(args.block_number)
 
 	if scope == "full_year":
 		query_parts.append(
 			f"full year {args.year} winter spring fall all blocks start end dates deadlines"
 		)
 		year_included = True
-	elif args.season:
-		query_parts.append(f"{args.season} {args.year}")
+	elif resolved_season:
+		query_parts.append(f"{resolved_season} {args.year}")
 		year_included = True
 	if args.block_number:
 		query_parts.append(f"block {args.block_number}")
@@ -170,6 +227,7 @@ async def extract_structured_data(
 		return None
 
 	scope = (getattr(args, "scope", "term") or "term").lower()
+	resolved_season = args.season or _season_for_block(args.block_number)
 	max_chars = _MAX_CONTEXT_CHARS_FULL_YEAR if scope == "full_year" else _MAX_CONTEXT_CHARS
 	max_nodes = _MAX_CONTEXT_NODES_FULL_YEAR if scope == "full_year" else 10
 	max_attempts = (
@@ -192,8 +250,8 @@ async def extract_structured_data(
 	context = "\n\n---\n\n".join(context_parts)
 
 	query_desc = args.query_type.value
-	if args.season:
-		query_desc += f" for {args.season} {args.year}"
+	if resolved_season:
+		query_desc += f" for {resolved_season} {args.year}"
 	elif scope == "full_year":
 		query_desc += f" for full year {args.year}"
 	if args.block_number:
@@ -260,22 +318,48 @@ def build_calendar_card(
 	args: CalendarToolArgs,
 	today: date,
 ) -> Optional[dict]:
+	events_source = extracted.events
+	if args.query_type.value == "block" and args.block_number:
+		filtered_events: list[ExtractedCalendarEvent] = []
+		for evt in extracted.events:
+			try:
+				evt_date = date.fromisoformat(evt.date)
+			except ValueError:
+				continue
+			if _in_block_window(evt_date, args.block_number, args.year):
+				filtered_events.append(evt)
+		if filtered_events:
+			events_source = filtered_events
+
 	card_status = "upcoming"
 	if extracted.block_or_semester_start and extracted.block_or_semester_end:
 		try:
 			start = date.fromisoformat(extracted.block_or_semester_start)
 			end = date.fromisoformat(extracted.block_or_semester_end)
-			if today > end:
-				card_status = "past"
-			elif today >= start:
-				card_status = "active"
+			if (
+				args.query_type.value == "block"
+				and args.block_number
+				and (
+					not _in_block_window(start, args.block_number, args.year)
+					or not _in_block_window(end, args.block_number, args.year)
+				)
+			):
+				start = None
+				end = None
+			if start is not None and end is not None:
+				extracted.block_or_semester_start = start.isoformat()
+				extracted.block_or_semester_end = end.isoformat()
+				if today > end:
+					card_status = "past"
+				elif today >= start:
+					card_status = "active"
 		except ValueError:
 			pass
 
 	events = []
 	spotlight = None
 	parsed_events: list[tuple[date, ExtractedCalendarEvent]] = []
-	for evt in extracted.events:
+	for evt in events_source:
 		try:
 			evt_date = date.fromisoformat(evt.date)
 		except ValueError:
@@ -376,15 +460,34 @@ def build_calendar_card(
 			tabs.append({"label": block_data.block_label, "active": i == 0, "events": block_events})
 
 	normalized_title = extracted.title
+	normalized_subtitle = extracted.subtitle or ""
 	if args.query_type.value == "block" and args.block_number:
 		season = _season_for_block(args.block_number) or args.season
 		if season:
 			normalized_title = f"{season.capitalize()} {args.year} — Block {args.block_number}"
 
+		start_event = next(
+			(evt for evt in events_source if "start" in (evt.name or "").lower()),
+			None,
+		)
+		end_event = next(
+			(evt for evt in events_source if (evt.name or "").strip().lower() == "end"),
+			None,
+		)
+		if start_event and end_event:
+			try:
+				start_date = date.fromisoformat(start_event.date)
+				end_date = date.fromisoformat(end_event.date)
+				normalized_subtitle = _format_range(start_date, end_date)
+				extracted.block_or_semester_start = start_event.date
+				extracted.block_or_semester_end = end_event.date
+			except ValueError:
+				pass
+
 	card = {
 		"type": args.query_type.value,
 		"title": normalized_title,
-		"subtitle": extracted.subtitle or "",
+		"subtitle": normalized_subtitle,
 		"status": card_status,
 		"spotlight": spotlight,
 		"events": timeline_events,

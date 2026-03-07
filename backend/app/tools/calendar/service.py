@@ -11,9 +11,11 @@ from llama_index.core.settings import Settings
 from app.tools.calendar.schema import CalendarToolArgs
 from app.tools.calendar.tool import (
     _get_today,
+    _season_for_block,
     build_calendar_card,
     compute_suggestions,
     extract_structured_data,
+    is_block_extraction_misaligned,
     query_pinecone_for_calendar,
 )
 
@@ -74,6 +76,54 @@ def _prioritize_nodes_for_year(
 
     prioritized = [*matching, *non_matching]
     return prioritized[:max_nodes]
+
+
+def _prioritize_nodes_for_full_year_blocks(
+    nodes: list[Any],
+    year: int,
+    *,
+    max_nodes: int = 16,
+) -> list[Any]:
+    year_str = str(year)
+    year_nodes: list[Any] = []
+    fallback_nodes: list[Any] = []
+
+    for node in nodes or []:
+        text = getattr(node, "text", "") or ""
+        if year_str in text:
+            year_nodes.append(node)
+        else:
+            fallback_nodes.append(node)
+
+    selected: list[Any] = []
+    used: set[str] = set()
+
+    def _add_node(node: Any) -> None:
+        key = _node_key(node)
+        if key in used:
+            return
+        used.add(key)
+        selected.append(node)
+
+    for block in range(1, 7):
+        block_marker = f"block {block}"
+        match = next(
+            (
+                node
+                for node in year_nodes
+                if block_marker in (getattr(node, "text", "") or "").lower()
+            ),
+            None,
+        )
+        if match is not None:
+            _add_node(match)
+
+    for node in [*year_nodes, *fallback_nodes]:
+        if len(selected) >= max_nodes:
+            break
+        _add_node(node)
+
+    return selected[:max_nodes]
 
 
 def _build_retrieved_docs_metadata(
@@ -569,17 +619,32 @@ async def run_calendar_pipeline(
                         e,
                     )
 
+            for block in range(1, 7):
+                block_query = (
+                    f"academic calendar {calendar_args.year} block {block} "
+                    f"start end dates deadlines"
+                )
+                try:
+                    block_nodes = await retriever.aretrieve(block_query)
+                    expanded_nodes = _merge_nodes(expanded_nodes, block_nodes, max_nodes=30)
+                except Exception as e:
+                    logger.warning(
+                        "Calendar pipeline: block expansion query failed (block %s): %s",
+                        block,
+                        e,
+                    )
+
             if expanded_nodes:
-                nodes = _merge_nodes(nodes, expanded_nodes, max_nodes=24)
+                nodes = _merge_nodes(nodes, expanded_nodes, max_nodes=30)
                 metadata["retrieval_mode"] = "full_year_expanded"
 
-            nodes = _prioritize_nodes_for_year(
+            nodes = _prioritize_nodes_for_full_year_blocks(
                 nodes,
                 calendar_args.year,
-                max_nodes=12,
+                max_nodes=16,
             )
             metadata["retrieval_mode"] = (
-                f"{metadata.get('retrieval_mode', 'full_year')}+year_prioritized"
+                f"{metadata.get('retrieval_mode', 'full_year')}+block_coverage_prioritized"
             )
 
         if not nodes:
@@ -604,8 +669,11 @@ async def run_calendar_pipeline(
                     f"academic calendar {calendar_args.year} "
                     f"{calendar_args.year} Start/End Dates & Deadlines"
                 )
-                if calendar_args.season:
-                    strict_query += f" {calendar_args.season}"
+                resolved_season = calendar_args.season or _season_for_block(
+                    calendar_args.block_number
+                )
+                if resolved_season:
+                    strict_query += f" {resolved_season}"
                 if calendar_args.block_number:
                     strict_query += f" block {calendar_args.block_number}"
 
@@ -633,6 +701,44 @@ async def run_calendar_pipeline(
             logger.warning("Calendar pipeline: structured extraction failed")
             metadata["pipeline_status"] = "extraction_failed"
             return None, metadata
+
+        if (
+            calendar_args.query_type.value == "block"
+            and calendar_args.block_number
+            and is_block_extraction_misaligned(extracted, calendar_args)
+        ):
+            logger.warning(
+                "Calendar pipeline: block extraction appears misaligned (block=%s year=%s); retrying strict block extraction",
+                calendar_args.block_number,
+                calendar_args.year,
+            )
+
+            resolved_season = calendar_args.season or _season_for_block(
+                calendar_args.block_number
+            )
+            strict_block_query = (
+                f"academic calendar {calendar_args.year} "
+                f"{resolved_season or ''} block {calendar_args.block_number} "
+                "start end dates deadlines"
+            ).strip()
+            strict_block_nodes = await retriever.aretrieve(strict_block_query)
+            if strict_block_nodes:
+                metadata.update(_build_retrieved_docs_metadata(strict_block_nodes))
+                metadata["retrieval_mode"] = "strict_block_retry"
+                strict_extracted = await extract_structured_data(
+                    strict_block_nodes,
+                    calendar_args,
+                )
+                if strict_extracted and not is_block_extraction_misaligned(
+                    strict_extracted,
+                    calendar_args,
+                ):
+                    extracted = strict_extracted
+                    logger.info("Calendar pipeline: strict block extraction corrected alignment")
+                else:
+                    logger.warning(
+                        "Calendar pipeline: strict block retry did not improve alignment; keeping original extraction"
+                    )
 
         logger.info("Calendar pipeline: extracted %d events", len(extracted.events))
         metadata.update(

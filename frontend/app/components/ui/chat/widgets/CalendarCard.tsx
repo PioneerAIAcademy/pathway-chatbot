@@ -291,6 +291,54 @@ const SKELETON_EVENT: CalendarEvent = {
   status: "upcoming",
 };
 
+function extractYearFromText(value: string | undefined): number | null {
+  if (!value) return null;
+  const match = value.match(/\b20\d{2}\b/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function detectCalendarYear(cardData: Partial<CalendarCardData>): number | null {
+  const fromTitle = extractYearFromText(cardData.title);
+  if (fromTitle) return fromTitle;
+
+  const fromSubtitle = extractYearFromText(cardData.subtitle);
+  if (fromSubtitle) return fromSubtitle;
+
+  if (cardData.spotlight?.date) {
+    const spotlightYear = Number(cardData.spotlight.date.slice(0, 4));
+    if (Number.isFinite(spotlightYear) && spotlightYear >= 2000) {
+      return spotlightYear;
+    }
+  }
+
+  if (cardData.events && cardData.events.length > 0) {
+    const eventYear = Number((cardData.events[0]?.date || "").slice(0, 4));
+    if (Number.isFinite(eventYear) && eventYear >= 2000) {
+      return eventYear;
+    }
+  }
+
+  if (cardData.tabs && cardData.tabs.length > 0) {
+    for (const tab of cardData.tabs) {
+      const tabEventYear = Number((tab.events?.[0]?.date || "").slice(0, 4));
+      if (Number.isFinite(tabEventYear) && tabEventYear >= 2000) {
+        return tabEventYear;
+      }
+    }
+  }
+
+  return null;
+}
+
+function buildOpenCalendarPrompt(year: number | null): string {
+  if (year) {
+    return `Show me the full ${year} academic calendar`;
+  }
+  return "Show me the full academic calendar";
+}
+
 // --- Main CalendarCard ---
 export function CalendarCard({
   data,
@@ -413,6 +461,8 @@ export function CalendarCard({
   const rowCount = timelineStarted
     ? Math.max(SKELETON_ROW_COUNT, displayEvents.length)
     : SKELETON_ROW_COUNT;
+
+  const calendarYear = useMemo(() => detectCalendarYear(cardData), [cardData]);
 
   return (
     <div className="flex flex-col gap-3">
@@ -552,16 +602,19 @@ export function CalendarCard({
             className={`${styles.footer} px-3 sm:px-4 py-2.5 sm:py-3 border-t border-gray-200/60 dark:border-white/[0.06] flex flex-col items-start sm:flex-row sm:items-center sm:justify-between gap-2`}
           >
             <div className="flex gap-2">
-              <a
-                href={cardData.sourceUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+              <button
+                type="button"
+                onClick={() =>
+                  append?.({
+                    role: "user",
+                    content: buildOpenCalendarPrompt(calendarYear),
+                  } as Message)
+                }
                 className="inline-flex items-center gap-1.5 text-[11.5px] sm:text-[12.5px] font-semibold text-[#002E5D] dark:text-[#002E5D] bg-[hsl(var(--header-bg))] hover:bg-amber-300 dark:hover:bg-amber-300 px-3 sm:px-4 py-1.5 rounded-lg transition-all hover:-translate-y-px hover:shadow-[0_4px_12px_rgba(255,195,40,0.25)]"
               >
                 <Calendar className="w-3.5 h-3.5" />
-                Full Calendar
-                <ExternalLink className="w-3 h-3" />
-              </a>
+                {calendarYear ? `Open ${calendarYear} Calendar` : "Open Calendar"}
+              </button>
             </div>
             <div className="text-[10px] sm:text-[10.5px] text-gray-400 dark:text-gray-600">
               Source:{" "}
