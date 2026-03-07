@@ -76,6 +76,40 @@ def _prioritize_nodes_for_year(
     return prioritized[:max_nodes]
 
 
+def _build_retrieved_docs_metadata(
+    nodes: list[Any],
+    *,
+    max_docs: int = 8,
+    max_chars: int = 420,
+) -> dict[str, Any]:
+    docs: list[dict[str, Any]] = []
+    for idx, node in enumerate(nodes[:max_docs]):
+        metadata = getattr(getattr(node, "node", None), "metadata", None) or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        text = (getattr(node, "text", "") or "").strip()
+        snippet = text[:max_chars]
+        if len(text) > max_chars:
+            snippet += "…"
+
+        docs.append(
+            {
+                "rank": idx + 1,
+                "score": getattr(node, "score", None),
+                "url": metadata.get("url") or metadata.get("source_url"),
+                "title": metadata.get("title") or metadata.get("file_name"),
+                "snippet": snippet,
+            }
+        )
+
+    return {
+        "retrieved_nodes_count": len(nodes),
+        "retrieved_docs_count": len(nodes),
+        "retrieved_docs": docs,
+    }
+
+
 async def localize_calendar_intro(
     intro_text: str,
     user_language: Optional[str],
@@ -554,7 +588,7 @@ async def run_calendar_pipeline(
             return None, metadata
 
         logger.info("Calendar pipeline: got %d nodes", len(nodes))
-        metadata["retrieved_nodes_count"] = len(nodes)
+        metadata.update(_build_retrieved_docs_metadata(nodes))
 
         available_years = _available_years_from_nodes(nodes)
         if available_years:
@@ -578,7 +612,7 @@ async def run_calendar_pipeline(
                 strict_nodes = await retriever.aretrieve(strict_query)
                 if strict_nodes:
                     nodes = strict_nodes
-                    metadata["retrieved_nodes_count"] = len(nodes)
+                    metadata.update(_build_retrieved_docs_metadata(nodes))
                     metadata["retrieval_mode"] = "strict_year_retry"
                     available_years = _available_years_from_nodes(nodes)
                     metadata["available_years_from_nodes"] = available_years
