@@ -40,7 +40,7 @@ class InputValidator:
     """Validates user input for security threats and prompt injection attacks."""
     
     # Maximum allowed character length based on analysis (99% of legitimate questions)
-    MAX_QUESTION_LENGTH = 500
+    MAX_QUESTION_LENGTH = 2000
 
     # Calendar-intent vocabulary used to bypass known Pytector false positives
     CALENDAR_TERMS = [
