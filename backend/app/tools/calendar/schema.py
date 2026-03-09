@@ -42,7 +42,7 @@ class CalendarToolArgs(BaseModel):
 	scope: CalendarQueryScope = Field(
 		default=CalendarQueryScope.TERM,
 		description=(
-			"Scope of the query: 'term' for a specific season/block, "
+			"Scope of the query: 'term' for a specific block, "
 			"'full_year' for an entire academic year overview"
 		),
 	)
@@ -93,7 +93,7 @@ class ExtractedCalendarData(BaseModel):
 	blocks: Optional[list[ExtractedBlockData]] = Field(
 		None,
 		description=(
-			"For semester/year overview queries: events grouped by block/term "
-			"within the selected scope"
+			"For full-year or multi-block overview queries: events grouped "
+			"by block within the selected scope"
 		),
 	)

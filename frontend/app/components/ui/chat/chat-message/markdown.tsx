@@ -154,7 +154,7 @@ const DATE_CHIP_STYLE: CSSProperties = {
   padding: "1.5px 6px",
   fontFamily:
     "'Söhne Mono', ui-monospace, 'SFMono-Regular', 'Cascadia Code', monospace",
-  fontSize: "13.2px",
+  fontSize: "15px",
   lineHeight: 1.2,
   letterSpacing: "0.01em",
   fontWeight: 800,

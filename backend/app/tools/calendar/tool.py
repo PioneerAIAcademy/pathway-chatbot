@@ -41,10 +41,12 @@ def get_calendar_tool_definition() -> dict:
 			"name": "lookup_academic_calendar",
 			"description": (
 				"Look up BYU-Pathway academic calendar dates, deadlines, "
-				"block/semester schedules, and graduation information. "
+				"block schedules, and graduation information. "
 				"Call this when the user is clearly asking about academic calendar "
 				"dates, registration deadlines, block start/end dates, payment "
 				"deadlines, drop deadlines, graduation dates, or commencement. "
+				"Note: students may say 'term', 'block', or 'semester' "
+				"interchangeably \u2014 treat all three as synonyms. "
 				"Do NOT call this for questions about gatherings, classes, "
 				"certificates, or general scheduling unrelated to the academic calendar."
 			),
@@ -157,6 +159,84 @@ def _format_range(start_date: date, end_date: date) -> str:
 		f"{end_date.strftime('%B')} {end_date.day}, {end_date.year}"
 	)
 
+def _expected_blocks_for_scope(
+	scope: str,
+	season: Optional[str],
+) -> list[int]:
+	"""Return the block numbers expected for a given scope/season."""
+	if scope == "full_year":
+		return [1, 2, 3, 4, 5, 6]
+	season_lower = (season or "").strip().lower()
+	if season_lower in ("winter",):
+		return [1, 2]
+	if season_lower in ("spring", "summer"):
+		return [3, 4]
+	if season_lower in ("fall",):
+		return [5, 6]
+	return []
+
+
+def _ensure_all_block_tabs(
+	tabs: list[dict],
+	flat_events: list[ExtractedCalendarEvent],
+	expected_blocks: list[int],
+	year: int,
+	today: date,
+) -> list[dict]:
+	"""Ensure all expected block tabs exist; fill missing ones from flat events."""
+	existing_block_nums: set[int] = set()
+	for tab in tabs:
+		m = re.search(r"\d+", tab.get("label") or "")
+		if m:
+			existing_block_nums.add(int(m.group()))
+
+	missing = [b for b in expected_blocks if b not in existing_block_nums]
+	if not missing:
+		return tabs
+
+	logger.warning(
+		"Block tabs missing %s — filling from flat events (%d total)",
+		missing,
+		len(flat_events),
+	)
+
+	for block_num in missing:
+		block_events = []
+		for evt in flat_events:
+			try:
+				evt_date = date.fromisoformat(evt.date)
+			except ValueError:
+				continue
+			if not _in_block_window(evt_date, block_num, year):
+				continue
+			status = _classify_date(evt_date, today)
+			countdown = _countdown_str(evt_date, today)
+			section = "Past" if status == "past" else "Today" if status == "today" else "Coming Up"
+			block_events.append({
+				"date": evt.date,
+				"name": evt.name,
+				"status": status,
+				"countdown": countdown,
+				"description": evt.description or "",
+				"section": section,
+			})
+		tabs.append({
+			"label": f"Block {block_num}",
+			"active": False,
+			"events": block_events,
+		})
+
+	# Sort tabs by block number
+	def _tab_sort_key(tab: dict) -> int:
+		m = re.search(r"\d+", tab.get("label") or "")
+		return int(m.group()) if m else 999
+
+	tabs.sort(key=_tab_sort_key)
+	# Re-set active: first tab is active
+	for i, tab in enumerate(tabs):
+		tab["active"] = i == 0
+
+	return tabs
 
 async def query_pinecone_for_calendar(args: CalendarToolArgs, retriever) -> list:
 	query_parts = ["academic calendar"]
@@ -205,15 +285,26 @@ _EXTRACTION_SYSTEM = (
 	'  "events": [{"date": "YYYY-MM-DD", "name": "string", "description": "string"}],\n'
 	'  "source_url": "string or null",\n'
 	'  "footnote": "string or null",\n'
-	'  "blocks": null or [{"block_label": "Block 1", "events": [...same event shape...]}]\n'
+	'  "blocks": null or [{"block_label": "Block 3", "events": [...same event shape...]}]\n'
 	"}\n"
 	"Rules:\n"
 	"- WARNING: DO NOT INVENT, SHIFT, OR EXTRAPOLATE YEARS OR DATES. USE ONLY DATES EXPLICITLY PRESENT IN DOCUMENTS.\n"
 	"- Only include events matching the query.\n"
-	"- If scope is full_year, include all relevant events across Winter, Spring, and Fall for that year, grouped by block/term where possible.\n"
+	"- If scope is full_year, include all relevant events across Winter, Spring, and Fall for that year, grouped by block where possible.\n"
 	"- Dates MUST be ISO format YYYY-MM-DD. Omit events with ambiguous dates.\n"
 	"- For semester queries, group events by block in the 'blocks' field.\n"
-	"- For single-block queries, leave 'blocks' as null.\n"
+	"- CRITICAL: Each block must only contain dates that belong to THAT block. "
+	"Do NOT put semester-level dates or other block dates under the wrong block. "
+	"For example, Block 5 end date is NOT the same as the semester end date — "
+	"use the specific block end date from the source documents.\n"
+	"- CRITICAL: A full academic year ALWAYS has exactly 6 blocks: "
+	"Block 1 & 2 (Winter), Block 3 & 4 (Spring), Block 5 & 6 (Fall). "
+	"A single semester (Winter, Spring, or Fall) ALWAYS has exactly 2 blocks. "
+	"You MUST include ALL blocks — never skip any.\n"
+	"- CRITICAL: block_label MUST use the CANONICAL block number: "
+	"Winter = Block 1, Block 2. Spring = Block 3, Block 4. Fall = Block 5, Block 6. "
+	"Do NOT number blocks starting from 1 within each semester. "
+	"The first Spring block is ALWAYS 'Block 3', NEVER 'Block 1'.\n"	"- For single-block queries, leave 'blocks' as null.\n"
 	"- IMPORTANT: Every event MUST have a short 'description' (1 sentence, max 15 words). "
 	"Explain what it means for the student.\n"
 )
@@ -440,11 +531,18 @@ def build_calendar_card(
 	if args.query_type.value == "semester" and extracted.blocks:
 		tabs = []
 		for i, block_data in enumerate(extracted.blocks):
+			# Parse block number from label (e.g. "Block 5" -> 5) for date filtering
+			block_num_match = re.search(r"\d+", block_data.block_label or "")
+			block_num = int(block_num_match.group()) if block_num_match else None
+
 			block_events = []
 			for evt in block_data.events:
 				try:
 					evt_date = date.fromisoformat(evt.date)
 				except ValueError:
+					continue
+				# Filter out events that don't belong in this block's date window
+				if block_num and not _in_block_window(evt_date, block_num, args.year):
 					continue
 				status = _classify_date(evt_date, today)
 				countdown = _countdown_str(evt_date, today)
@@ -458,6 +556,14 @@ def build_calendar_card(
 					"section": section,
 				})
 			tabs.append({"label": block_data.block_label, "active": i == 0, "events": block_events})
+
+		# Ensure all expected blocks are present (fill missing from flat events)
+		scope = (getattr(args, "scope", "term") or "term").lower()
+		expected = _expected_blocks_for_scope(scope, args.season)
+		if expected:
+			tabs = _ensure_all_block_tabs(
+				tabs, extracted.events, expected, args.year, today,
+			)
 
 	normalized_title = extracted.title
 	normalized_subtitle = extracted.subtitle or ""

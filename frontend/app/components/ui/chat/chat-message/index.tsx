@@ -214,6 +214,26 @@ function ChatMessageContent({
     MessageAnnotationType.DATE_SPANS,
   );
 
+  const hasCalendarContent =
+    shouldShowCalendarErrorNotice ||
+    Boolean(calendarData[0]) ||
+    Boolean(calendarState);
+
+  const rawCalendarText = (message.content || "").trim();
+  let calendarIntroText = rawCalendarText;
+  let calendarPostText = "";
+  if (hasCalendarContent && rawCalendarText) {
+    const parts = rawCalendarText
+      .split(/\n{2,}/)
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
+
+    if (parts.length > 1) {
+      calendarIntroText = parts[0];
+      calendarPostText = parts.slice(1).join("\n\n");
+    }
+  }
+
   const contents: ContentDisplayConfig[] = [
     {
       order: 1,
@@ -244,7 +264,7 @@ function ChatMessageContent({
       order: 0,
       component: shouldHideMarkdownForCalendarError ? null : (
         <Markdown
-          content={message.content}
+          content={hasCalendarContent ? calendarIntroText : message.content}
           sources={sourceData[0]}
           dateSpans={dateSpansData[0]}
         />
@@ -259,6 +279,13 @@ function ChatMessageContent({
       ) : calendarState ? (
         <CalendarCard state={calendarState} append={append} />
       ) : null,
+    },
+    {
+      order: 0.6,
+      component:
+        hasCalendarContent && calendarPostText && !shouldHideMarkdownForCalendarError ? (
+          <Markdown content={calendarPostText} sources={sourceData[0]} />
+        ) : null,
     },
     {
       order: 3,

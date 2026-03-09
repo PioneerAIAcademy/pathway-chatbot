@@ -2,8 +2,9 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
-from typing import Optional
+from typing import Any, Optional
 
 from aiostream import stream
 from fastapi import Request
@@ -55,6 +56,15 @@ class VercelStreamResponse(StreamingResponse):
         message_str = json.dumps(message)
         return f"{cls.ERROR_PREFIX}{message_str}\n"
 
+    @classmethod
+    def _iter_text_chunks(cls, text: str):
+        """Yield small text chunks to preserve typewriter-like rendering."""
+        if not text:
+            return
+        for chunk in re.findall(r"\n+|\S+\s*", text):
+            if chunk:
+                yield chunk
+
     def __init__(
         self,
         request: Request,
@@ -68,6 +78,9 @@ class VercelStreamResponse(StreamingResponse):
         emit_initial_status: bool = True,
         calendar_pipeline: Optional[Callable[[], Awaitable[Optional[dict]]]] = None,
         calendar_intro: Optional[str] = None,
+        supplemental_text_pipeline: Optional[
+            Callable[[dict], Awaitable[Optional[dict[str, Any]]]]
+        ] = None,
     ):
         content = VercelStreamResponse.content_generator(
             request,
@@ -81,6 +94,7 @@ class VercelStreamResponse(StreamingResponse):
             emit_initial_status,
             calendar_pipeline,
             calendar_intro,
+            supplemental_text_pipeline,
         )
         super().__init__(content=content, media_type="text/plain")
 
@@ -98,6 +112,9 @@ class VercelStreamResponse(StreamingResponse):
         emit_initial_status: bool = True,
         calendar_pipeline: Optional[Callable[[], Awaitable[Optional[dict]]]] = None,
         calendar_intro: Optional[str] = None,
+        supplemental_text_pipeline: Optional[
+            Callable[[dict], Awaitable[Optional[dict[str, Any]]]]
+        ] = None,
     ):
         final_response = ""
         resolved_response: StreamingAgentChatResponse | None = None
@@ -240,6 +257,7 @@ class VercelStreamResponse(StreamingResponse):
 
             if calendar_intro is not None:
                 # ---- Calendar-only path (no RAG, no events) ----
+                supplemental_source_nodes: list[Any] = []
                 yield cls.convert_data(
                     {
                         "type": "events",
@@ -274,7 +292,8 @@ class VercelStreamResponse(StreamingResponse):
                     except asyncio.TimeoutError:
                         fallback = "I couldn’t load the academic calendar right now. Please try again."
                         final_response = fallback
-                        yield cls.convert_text(fallback)
+                        for chunk in cls._iter_text_chunks(fallback):
+                            yield cls.convert_text(chunk)
                         yield cls.convert_data(
                             {
                                 "type": "calendar_error",
@@ -286,7 +305,8 @@ class VercelStreamResponse(StreamingResponse):
                     except Exception:
                         fallback = "I couldn’t load the academic calendar right now. Please try again."
                         final_response = fallback
-                        yield cls.convert_text(fallback)
+                        for chunk in cls._iter_text_chunks(fallback):
+                            yield cls.convert_text(chunk)
                         yield cls.convert_data(
                             {
                                 "type": "calendar_error",
@@ -310,7 +330,8 @@ class VercelStreamResponse(StreamingResponse):
                                 f"I don’t have verified academic calendar dates for {requested_year} yet."
                             )
                         final_response = message
-                        yield cls.convert_text(message)
+                        for chunk in cls._iter_text_chunks(message):
+                            yield cls.convert_text(chunk)
                         yield cls.convert_data(
                             {
                                 "type": "calendar_error",
@@ -319,14 +340,56 @@ class VercelStreamResponse(StreamingResponse):
                             }
                         )
                     elif isinstance(calendar_data, dict):
-                        final_response = calendar_intro
-                        yield cls.convert_text(calendar_intro)
+                        if calendar_intro:
+                            final_response = calendar_intro
+                            for chunk in cls._iter_text_chunks(calendar_intro):
+                                yield cls.convert_text(chunk)
+
                         for patch in _build_calendar_patches(calendar_data, trace_id):
                             yield patch
+
+                        post_card_text = str(calendar_data.get("postCardText") or "").strip()
+                        if post_card_text:
+                            final_response = (
+                                f"{final_response}\n\n{post_card_text}"
+                                if final_response
+                                else post_card_text
+                            )
+                            for chunk in cls._iter_text_chunks(f"\n\n{post_card_text}"):
+                                yield cls.convert_text(chunk)
+
+                        if supplemental_text_pipeline is not None:
+                            try:
+                                supplemental_payload = (
+                                    await supplemental_text_pipeline(calendar_data) or {}
+                                )
+                                extra_text = str(
+                                    supplemental_payload.get("text") or ""
+                                ).strip()
+                                supplemental_source_nodes = list(
+                                    supplemental_payload.get("source_nodes") or []
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    "Secondary text pipeline failed: %s",
+                                    e,
+                                )
+                                extra_text = ""
+                                supplemental_source_nodes = []
+
+                            if extra_text:
+                                final_response = (
+                                    f"{final_response}\n\n{extra_text}"
+                                    if final_response
+                                    else extra_text
+                                )
+                                for chunk in cls._iter_text_chunks(f"\n\n{extra_text}"):
+                                    yield cls.convert_text(chunk)
                     elif calendar_data is None and not final_response:
                         fallback = "I couldn’t find calendar data for that request."
                         final_response = fallback
-                        yield cls.convert_text(fallback)
+                        for chunk in cls._iter_text_chunks(fallback):
+                            yield cls.convert_text(chunk)
                         yield cls.convert_data(
                             {
                                 "type": "calendar_error",
@@ -336,7 +399,8 @@ class VercelStreamResponse(StreamingResponse):
                         )
                 else:
                     final_response = calendar_intro
-                    yield cls.convert_text(calendar_intro)
+                    for chunk in cls._iter_text_chunks(calendar_intro):
+                        yield cls.convert_text(chunk)
 
                 event_handler.is_done = True
 
@@ -357,7 +421,12 @@ class VercelStreamResponse(StreamingResponse):
                 yield cls.convert_data(
                     {
                         "type": "sources",
-                        "data": {"nodes": []},
+                        "data": {
+                            "nodes": [
+                                SourceNodes.from_source_node(node).model_dump()
+                                for node in supplemental_source_nodes
+                            ]
+                        },
                         "trace_id": trace_id,
                     }
                 )

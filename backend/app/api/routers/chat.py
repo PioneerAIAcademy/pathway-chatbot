@@ -38,11 +38,20 @@ from app.tools.calendar import (
     localize_calendar_intro,
     run_calendar_pipeline,
 )
+from app.tools.calendar.router import (
+    _find_original_calendar_question,
+    _is_calendar_retry,
+)
 import os
 
 chat_router = r = APIRouter()
 
 logger = logging.getLogger("uvicorn")
+
+
+def _is_calendar_secondary_text_enabled() -> bool:
+    value = os.getenv("CALENDAR_SECONDARY_TEXT_ENABLED", "true").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -267,6 +276,20 @@ async def chat(
         calendar_args = None
         calendar_clarification = None
 
+        # If the user clicked "Try again" on a failed calendar card, the
+        # frontend sends a canned retry message.  Resolve the original
+        # question so every downstream consumer uses real calendar context.
+        if _is_calendar_retry(last_message_content):
+            original_q = _find_original_calendar_question(
+                last_message_content, messages,
+            )
+            if original_q:
+                logger.info(
+                    "Calendar retry detected — using original question: %s",
+                    original_q[:80],
+                )
+                last_message_content = original_q
+
         try:
             calendar_args, calendar_clarification = (
                 await detect_calendar_intent_via_llm(
@@ -305,6 +328,77 @@ async def chat(
                     "availableYears": pipeline_metadata.get("available_years_from_nodes", []),
                 }
             return card
+
+        async def _calendar_secondary_text_pipeline(calendar_data: dict) -> Optional[dict[str, Any]]:
+            """Optional phase-2 mixed-intent follow-up using normal RAG.
+
+            Runs only when calendar pipeline marks rag_context with sufficient confidence
+            and feature flag is enabled.
+            """
+            if not _is_calendar_secondary_text_enabled():
+                return None
+
+            mode = str(calendar_data.get("secondaryTextMode") or "").strip().lower()
+            confidence = float(calendar_data.get("secondaryTextConfidence") or 0.0)
+            if mode != "rag_context" or confidence < 0.75:
+                return None
+
+            rag_engine = None
+            try:
+                rag_engine = get_chat_engine(filters=filters, params=params)
+                followup_prompt = (
+                    "A calendar card is already displayed showing relevant dates and deadlines. "
+                    "Now provide a helpful text answer to the user's question in 2-4 concise sentences. "
+                    "If the question is about a calendar item (e.g. a deadline), explain what it means, "
+                    "what happens if it's missed, and any steps the student should take. "
+                    "If the question has a non-calendar component, answer that part instead. "
+                    "Do NOT repeat the dates already shown in the card.\n\n"
+                    f"User message: {last_message_content}"
+                )
+                response = await rag_engine.achat(followup_prompt, messages)
+                text = str(getattr(response, "response", "") or "").strip()
+                if not text:
+                    return None
+
+                followup_nodes = list(getattr(response, "source_nodes", []) or [])
+                if followup_nodes:
+                    try:
+                        retrieval_metadata["secondary_retrieved_docs"] = "\n\n".join(
+                            [
+                                f"node_id: {idx+1}\n{node.metadata.get('url', '')}\n{node.text}"
+                                for idx, node in enumerate(followup_nodes)
+                            ]
+                        )
+                        retrieval_metadata["secondary_retrieved_docs_count"] = len(
+                            followup_nodes
+                        )
+                    except Exception as retrieval_error:
+                        logger.warning(
+                            "Failed to build secondary retrieved docs metadata: %s",
+                            retrieval_error,
+                        )
+
+                calendar_metadata["secondary_text_followup"] = {
+                    "mode": mode,
+                    "confidence": confidence,
+                    "status": "generated",
+                }
+                return {"text": text, "source_nodes": followup_nodes}
+            except Exception as e:
+                logger.warning("Secondary RAG follow-up failed: %s", e)
+                calendar_metadata["secondary_text_followup"] = {
+                    "mode": mode,
+                    "confidence": confidence,
+                    "status": "error",
+                    "error": str(e),
+                }
+                return None
+            finally:
+                if rag_engine is not None:
+                    try:
+                        rag_engine.reset()
+                    except Exception:
+                        pass
 
         async def _on_stream_end(final_response: str) -> None:
             # Update trace output after streaming finishes (or client disconnects).
@@ -403,6 +497,7 @@ async def chat(
             emit_initial_status=False,
             calendar_pipeline=_calendar_pipeline,
             calendar_intro=calendar_intro,
+            supplemental_text_pipeline=_calendar_secondary_text_pipeline,
         )
         # return VercelStreamResponse(request, event_handler, response, data, tokens)
     except Exception as e:

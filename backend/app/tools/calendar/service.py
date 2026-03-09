@@ -1,4 +1,3 @@
-import hashlib
 import json
 import logging
 import re
@@ -22,6 +21,21 @@ from app.tools.calendar.tool import (
 logger = logging.getLogger("uvicorn")
 
 _YEAR_PATTERN = re.compile(r"\b20\d{2}\b")
+
+_SECONDARY_TEXT_MODE_PROMPT = (
+    "You classify whether a calendar response also needs a second text answer. "
+    "Return JSON only with keys: mode, confidence, reason. "
+    "mode must be one of: calendar_context, rag_context, clarification. "
+    "Use rag_context when: "
+    "(a) the user asks a non-calendar/process question alongside calendar data, OR "
+    "(b) the user asks an informational/explanatory question about a calendar item "
+    "(e.g. 'what should I know about…', 'tell me about…', 'what is…', 'explain…', 'what happens if…'). "
+    "The calendar card only shows dates — it cannot explain meaning, consequences, or preparation steps. "
+    "Use clarification when intent is truly ambiguous and you cannot determine what the user needs. "
+    "Use calendar_context ONLY when the user asks a purely date/schedule question that the card fully answers "
+    "(e.g. 'when is…', 'show me the dates'). "
+    "confidence must be a float from 0 to 1."
+)
 
 
 def _available_years_from_nodes(nodes: list[Any]) -> list[int]:
@@ -367,15 +381,6 @@ async def localize_calendar_card(
         return card
 
 
-def _pick(options: list[str], key: str) -> str:
-    """Deterministic pseudo-random variant picker for stable variety."""
-    if not options:
-        return ""
-    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
-    index = int(digest[:8], 16) % len(options)
-    return options[index]
-
-
 def _normalize_season(raw: Optional[str]) -> str:
     value = (raw or "").strip().lower()
     if value == "summer":
@@ -406,150 +411,218 @@ def _humanize_deadline(deadline: Optional[str]) -> str:
     return label
 
 
+def _clamp_confidence(value: Any, default: float) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        return default
+    if parsed < 0:
+        return 0.0
+    if parsed > 1:
+        return 1.0
+    return parsed
+
+
+async def _classify_secondary_text_mode_llm(
+    args: CalendarToolArgs,
+    card: dict[str, Any],
+    user_query: str,
+) -> Optional[dict[str, Any]]:
+    """Classify secondary text mode via a lightweight structured LLM call."""
+    try:
+        payload = {
+            "user_query": user_query,
+            "calendar_args": {
+                "query_type": args.query_type.value,
+                "scope": getattr(args, "scope", "term"),
+                "season": args.season,
+                "year": args.year,
+                "block_number": args.block_number,
+                "specific_deadline": args.specific_deadline,
+            },
+            "card_summary": {
+                "title": card.get("title"),
+                "subtitle": card.get("subtitle"),
+                "spotlight_title": (card.get("spotlight") or {}).get("title"),
+                "event_names": [
+                    evt.get("name")
+                    for evt in (card.get("events") or [])[:5]
+                    if isinstance(evt, dict)
+                ],
+            },
+        }
+
+        response = await Settings.llm.achat(
+            messages=[
+                ChatMessage(role=MessageRole.SYSTEM, content=_SECONDARY_TEXT_MODE_PROMPT),
+                ChatMessage(
+                    role=MessageRole.USER,
+                    content=json.dumps(payload, ensure_ascii=False),
+                ),
+            ],
+        )
+
+        parsed = _parse_translation_json(response.message.content or "")
+        if not isinstance(parsed, dict):
+            return None
+
+        mode = str(parsed.get("mode") or "").strip().lower()
+        if mode not in {"calendar_context", "rag_context", "clarification"}:
+            return None
+
+        confidence = _clamp_confidence(parsed.get("confidence"), default=0.0)
+        reason = str(parsed.get("reason") or "llm_classifier").strip() or "llm_classifier"
+
+        return {
+            "mode": mode,
+            "confidence": confidence,
+            "reason": reason,
+        }
+    except Exception as e:
+        logger.warning("Secondary text LLM classifier failed: %s", e)
+        return None
+
+
+_CARD_EXPLANATION_PROMPT = (
+    "You are a BYU-Pathway student support assistant. A calendar card was just "
+    "displayed to the student showing academic dates. Write 1-2 brief, helpful "
+    "sentences that directly answer their question based on the card data and "
+    "source documents below.\n\n"
+    "Rules:\n"
+    "- Use the source_documents field (original academic calendar text) as your "
+    "primary source of truth. The card data summarizes it, but the source has full details.\n"
+    "- Do NOT repeat the full list of dates — just answer the question conversationally.\n"
+    "- Do NOT start with 'Based on the card' or similar meta-references."
+)
+
+
+async def _generate_card_explanation(
+    card: dict[str, Any],
+    user_query: str,
+    source_context: str = "",
+) -> str:
+    """Generate a brief explanatory sentence from the card data and source documents."""
+    spotlight = card.get("spotlight") or {}
+    events = card.get("events") or []
+    event_summaries = [
+        f"{evt.get('name')}: {evt.get('date')} ({evt.get('status', '')})"
+        for evt in events[:6]
+        if isinstance(evt, dict)
+    ]
+    payload_dict: dict[str, Any] = {
+        "user_question": user_query,
+        "card_title": card.get("title"),
+        "card_subtitle": card.get("subtitle"),
+        "spotlight": {
+            "title": spotlight.get("title"),
+            "date": spotlight.get("date"),
+            "status": spotlight.get("status"),
+            "countdown": spotlight.get("countdown"),
+        } if spotlight else None,
+        "key_events": event_summaries,
+    }
+    if source_context:
+        payload_dict["source_documents"] = source_context[:2000]
+    payload = json.dumps(payload_dict, ensure_ascii=False)
+
+    try:
+        response = await Settings.llm.achat(
+            messages=[
+                ChatMessage(role=MessageRole.SYSTEM, content=_CARD_EXPLANATION_PROMPT),
+                ChatMessage(role=MessageRole.USER, content=payload),
+            ],
+        )
+        return (response.message.content or "").strip()
+    except Exception as e:
+        logger.warning("Card explanation generation failed: %s", e)
+        return ""
+
+
+async def build_secondary_calendar_text(
+    args: CalendarToolArgs,
+    card: dict[str, Any],
+    user_query: Optional[str],
+    source_context: str = "",
+) -> dict[str, Any]:
+    """Build post-card text plan using LLM classification."""
+    query = (user_query or "").strip()
+    if not query:
+        return {"mode": "calendar_context", "confidence": 0.9, "reason": "no_query", "text": ""}
+
+    llm_plan = await _classify_secondary_text_mode_llm(args, card, query)
+    if not llm_plan:
+        return {"mode": "calendar_context", "confidence": 0.5, "reason": "llm_failed", "text": ""}
+
+    mode = str(llm_plan.get("mode") or "calendar_context").strip().lower()
+    confidence = _clamp_confidence(llm_plan.get("confidence"), 0.5)
+    reason = str(llm_plan.get("reason") or "llm_classifier").strip() or "llm_classifier"
+
+    if mode == "rag_context":
+        return {"mode": "rag_context", "confidence": confidence, "reason": reason, "text": ""}
+
+    if mode == "clarification":
+        return {
+            "mode": "clarification",
+            "confidence": confidence,
+            "reason": reason,
+            "text": (
+                "I can walk you through the calendar deadlines here. "
+                "Do you also want me to answer the non-calendar part separately?"
+            ),
+        }
+
+    # For calendar_context: generate a brief explanation from the card data + source docs
+    explanation = await _generate_card_explanation(card, query, source_context=source_context)
+    return {"mode": "calendar_context", "confidence": confidence, "reason": reason, "text": explanation}
+
+
 def build_calendar_intro(args: CalendarToolArgs) -> str:
-    """Build a short, humanized intro sentence for a calendar card."""
+    """Build a short intro sentence for a calendar card."""
     qt = args.query_type.value
     scope = (getattr(args, "scope", "term") or "term").lower()
     season_raw = _normalize_season(args.season)
     season = season_raw.capitalize() if season_raw else ""
     year = args.year
-    variant_key = (
-        f"{qt}|{season_raw}|{year}|{args.block_number}|{args.specific_deadline}"
-    )
+
+    def _block_label() -> str:
+        canonical = _season_for_block(args.block_number) or season_raw
+        if canonical:
+            return f"{canonical.capitalize()} {year} \u2014 Block {args.block_number}"
+        return f"Block {args.block_number} ({year})"
+
+    def _scope_label() -> str:
+        if args.block_number:
+            return _block_label()
+        if season:
+            return f"{season} {year}"
+        return str(year)
 
     if qt == "block" and args.block_number:
-        canonical = _season_for_block(args.block_number) or season_raw
-        if canonical:
-            label = f"{canonical.capitalize()} {year} — Block {args.block_number}"
-            return _pick(
-                [
-                    f"Here are the key dates for {label}:",
-                    f"Let me pull up the calendar for {label}:",
-                    f"Here’s {label} at a glance:",
-                ],
-                variant_key,
-            )
-        return _pick(
-            [
-                f"Here are the key dates for Block {args.block_number} ({year}):",
-                f"Let me pull up the calendar for Block {args.block_number} ({year}):",
-            ],
-            variant_key,
-        )
+        return f"Here are the key dates for {_block_label()}:"
 
-    if qt == "semester" and scope == "full_year":
-        return _pick(
-            [
-                f"Here’s the full {year} academic calendar at a glance:",
-                f"Let me pull up all {year} terms and deadlines:",
-                f"Here are the key dates across all {year} terms:",
-            ],
-            variant_key,
-        )
-
-    if qt == "semester" and season:
-        return _pick(
-            [
-                f"Here's the {season} {year} semester at a glance:",
-                f"Let me pull up the full {season} {year} semester:",
-                f"Here are the key dates for {season} {year}:",
-            ],
-            variant_key,
-        )
-
-    if qt == "deadline" and args.specific_deadline:
-        deadline = _humanize_deadline(args.specific_deadline)
+    if qt == "semester":
         if scope == "full_year":
-            return _pick(
-                [
-                    f"Here are all {deadline} dates for {year}:",
-                    f"Let me pull up {year} {deadline} deadlines across all terms:",
-                ],
-                variant_key,
-            )
-        if args.block_number:
-            canonical = _season_for_block(args.block_number) or season_raw
-            if canonical:
-                label = f"{canonical.capitalize()} {year} — Block {args.block_number}"
-                return _pick(
-                    [
-                        f"Here’s the {deadline} deadline for {label}:",
-                        f"Let me look up the {deadline} deadline for {label}:",
-                        f"Here’s what to know about the {deadline} deadline for {label}:",
-                    ],
-                    variant_key,
-                )
-            return _pick(
-                [
-                    f"Here’s the {deadline} deadline for Block {args.block_number}:",
-                    f"Let me look up the {deadline} deadline for Block {args.block_number}:",
-                ],
-                variant_key,
-            )
+            return f"Here's the full {year} academic calendar:"
         if season:
-            return _pick(
-                [
-                    f"Here’s the {deadline} deadline for {season} {year}:",
-                    f"Let me look up the {deadline} deadline for {season} {year}:",
-                ],
-                variant_key,
-            )
-        return _pick(
-            [f"Here’s the {deadline} deadline:", f"Let me look up the {deadline} deadline:"],
-            variant_key,
-        )
+            return f"Here are the key dates for {season} {year}:"
+        return f"Here's the {year} academic calendar:"
 
-    if qt == "deadline" and args.block_number:
-        canonical = _season_for_block(args.block_number) or season_raw
-        if canonical:
-            label = f"{canonical.capitalize()} {year} — Block {args.block_number}"
-            return _pick(
-                [
-                    f"Here are the key deadlines for {label}:",
-                    f"Let me pull up the key deadlines for {label}:",
-                ],
-                variant_key,
-            )
-        return _pick(
-            [
-                f"Here are the key deadlines for Block {args.block_number}:",
-                f"Let me pull up the key deadlines for Block {args.block_number}:",
-            ],
-            variant_key,
-        )
+    if qt == "deadline":
+        if args.specific_deadline:
+            deadline = _humanize_deadline(args.specific_deadline)
+            return f"Here's the {deadline} deadline for {_scope_label()}:"
+        if args.block_number:
+            return f"Here are the key deadlines for {_block_label()}:"
+        return f"Here are the key deadlines for {_scope_label()}:"
 
     if qt == "graduation":
         if season:
-            return _pick(
-                [
-                    f"Here are the {season} {year} graduation dates:",
-                    f"Let me pull up graduation dates for {season} {year}:",
-                ],
-                variant_key,
-            )
-        return _pick(
-            [
-                f"Here are the {year} graduation dates:",
-                f"Let me pull up the {year} graduation dates:",
-            ],
-            variant_key,
-        )
+            return f"Here are the {season} {year} graduation dates:"
+        return f"Here are the {year} graduation dates:"
 
     if season:
-        return _pick(
-            [
-                f"Here’s the {season} {year} calendar at a glance:",
-                f"Let me pull up the {season} {year} calendar:",
-            ],
-            variant_key,
-        )
-    return _pick(
-        [
-            f"Here’s the academic calendar for {year}:",
-            f"Let me pull up the academic calendar for {year}:",
-        ],
-        variant_key,
-    )
+        return f"Here's the {season} {year} calendar:"
+    return f"Here's the academic calendar for {year}:"
 
 
 def build_initial_calendar_metadata(args: CalendarToolArgs) -> dict[str, Any]:
@@ -772,6 +845,31 @@ async def run_calendar_pipeline(
             extracted,
             user_query=user_query,
         )
+
+        # Build source context from raw Pinecone nodes so the explanation
+        # LLM has full document data (like RAG would) to answer accurately.
+        source_context = "\n\n---\n\n".join(
+            n.text for n in nodes[:6] if hasattr(n, "text")
+        )[:2000]
+
+        secondary_plan = await build_secondary_calendar_text(
+            calendar_args,
+            card,
+            user_query=user_query,
+            source_context=source_context,
+        )
+        card["secondaryTextMode"] = secondary_plan.get("mode")
+        card["secondaryTextConfidence"] = secondary_plan.get("confidence")
+
+        secondary_text = str(secondary_plan.get("text") or "").strip()
+        if secondary_text:
+            secondary_text = await localize_calendar_intro(
+                secondary_text,
+                user_language=user_language,
+                original_user_message=user_query or "",
+            )
+            card["postCardText"] = secondary_text
+
         card = await localize_calendar_card(
             card,
             user_language=user_language,
@@ -789,6 +887,11 @@ async def run_calendar_pipeline(
                     "spotlight": card.get("spotlight", {}).get("title")
                     if card.get("spotlight")
                     else None,
+                },
+                "secondary_text": {
+                    "mode": secondary_plan.get("mode"),
+                    "confidence": secondary_plan.get("confidence"),
+                    "reason": secondary_plan.get("reason"),
                 },
             }
         )
