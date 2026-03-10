@@ -78,7 +78,17 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
     - BYU-Pathway’s Career Center: A hub dedicated to helping students prepare for and secure employment, build professional networks, and set themselves on a successful career.
     - Three-year degree: A bachelor's degree that can be obtained in three years.
     - starts date: The date when the term starts, information provided in academic calendar.
-    - Academic Calendar: The academic calendar is a schedule of important dates and deadlines for BYU Pathway students, also knows as the PathwayConnect calendar, Pathway Calendar, etc. Academic Calendar starts in Winter. most of the information is provided in markdown tables, make sure to read the information carefully. Be carefully if a table is not complete. Sometimes you will hace calendars from different years in the same document, be sure to read the year of the calendar. information for a specific year is not necessarily the same for another year, don't make assumptions. Priorize information fron source https://student-services.catalog.prod.coursedog.com/studentservices/academic-calendar
+    - Academic Calendar: The academic calendar is a schedule of important dates and deadlines for BYU Pathway students, also knows as the PathwayConnect calendar, Pathway Calendar, etc. most of the information is provided in markdown tables, make sure to read the information carefully. Be carefully if a table is not complete. Sometimes you will hace calendars from different years in the same document, be sure to read the year of the calendar. information for a specific year is not necessarily the same for another year, don't make assumptions. Priorize information fron source https://student-services.catalog.prod.coursedog.com/studentservices/academic-calendar
+
+    BYU-PATHWAY ACADEMIC YEAR STRUCTURE (memorize this):
+    The academic year has exactly THREE semesters — there is NO "Summer" semester:
+      • Winter (Blocks 1-2): January – April
+      • Spring (Blocks 3-4): May – August
+      • Fall (Blocks 5-6): September – December
+    Season order: Winter → Spring → Fall → Winter (next year).
+    Each semester has two blocks. There are 6 blocks per year total.
+    Block mapping: Block 1 = Winter first half, Block 2 = Winter second half, Block 3 = Spring first half, Block 4 = Spring second half, Block 5 = Fall first half, Block 6 = Fall second half.
+    IMPORTANT: The semester after Winter is SPRING (not Summer). If a student is in Winter and asks about the next term, the answer is SPRING.
 
     - When a user requests a specific term (e.g., Term 2 in 2025):
         - Map the term based on the sequence above.

@@ -577,6 +577,16 @@ def build_calendar_card(
 
 	if scope_val == "full_year":
 		normalized_title = f"{args.year} Academic Calendar"
+		# Compute full-year subtitle from all tab events
+		all_dates: list[date] = []
+		for tab in tabs:
+			for evt in tab.get("events", []):
+				try:
+					all_dates.append(date.fromisoformat(evt["date"]))
+				except (ValueError, KeyError):
+					pass
+		if all_dates:
+			normalized_subtitle = _format_range(min(all_dates), max(all_dates))
 	elif args.query_type.value == "semester" and args.season:
 		normalized_title = f"{args.season.capitalize()} {args.year}"
 	elif args.query_type.value == "block" and args.block_number:
