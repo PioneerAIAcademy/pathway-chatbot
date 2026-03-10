@@ -38,20 +38,18 @@ type ContentDisplayConfig = {
 
 function CalendarErrorNotice({
   reason,
-  append,
 }: {
   reason?: string;
-  append: Pick<ChatHandler, "append">["append"];
 }) {
   const title =
     reason === "timeout"
       ? "Calendar is taking longer than expected"
-      : "Calendar couldn't load right now";
+      : "I couldn't load the calendar just now";
 
   const message =
     reason === "timeout"
-      ? "Network lag or a temporary service issue may have interrupted loading."
-      : "A temporary issue occurred while loading the academic calendar.";
+      ? "This sometimes happens with slow connections. You can try asking again."
+      : "You can try asking your calendar question again, or ask me in a different way.";
 
   return (
     <div className="self-start inline-block w-fit max-w-full rounded-xl border border-amber-500/35 bg-amber-500/8 dark:bg-amber-500/10 px-4 py-3">
@@ -64,18 +62,6 @@ function CalendarErrorNotice({
           <p className="text-[12px] text-amber-800/90 dark:text-amber-200/90 mt-0.5">
             {message}
           </p>
-          <button
-            onClick={() =>
-              append?.({
-                role: "user",
-                content: "Please retry the academic calendar request",
-              } as Message)
-            }
-            className="mt-2 inline-flex items-center gap-1.5 text-[12px] font-medium px-2.5 py-1 rounded-md border border-amber-500/40 text-amber-700 dark:text-amber-200 hover:bg-amber-500/10 dark:hover:bg-amber-500/20 transition-colors"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            Try again
-          </button>
         </div>
       </div>
     </div>
@@ -273,7 +259,7 @@ function ChatMessageContent({
     {
       order: 0.5,
       component: shouldShowCalendarErrorNotice ? (
-        <CalendarErrorNotice reason={calError[0]?.reason} append={append} />
+        <CalendarErrorNotice reason={calError[0]?.reason} />
       ) : calendarData[0] ? (
         <CalendarCard data={calendarData[0]} append={append} />
       ) : calendarState ? (

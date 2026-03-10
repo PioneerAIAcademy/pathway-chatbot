@@ -483,17 +483,20 @@ async def _classify_secondary_text_mode_llm(
         return None
 
 
-_CARD_EXPLANATION_PROMPT = (
-    "You are a BYU-Pathway student support assistant. A calendar card was just "
-    "displayed to the student showing academic dates. Write 1-2 brief, helpful "
-    "sentences that directly answer their question based on the card data and "
-    "source documents below.\n\n"
-    "Rules:\n"
-    "- Use the source_documents field (original academic calendar text) as your "
-    "primary source of truth. The card data summarizes it, but the source has full details.\n"
-    "- Do NOT repeat the full list of dates — just answer the question conversationally.\n"
-    "- Do NOT start with 'Based on the card' or similar meta-references."
-)
+def _card_explanation_prompt(today: date) -> str:
+    return (
+        "You are a BYU-Pathway student support assistant. A calendar card was just "
+        "displayed to the student showing academic dates. Write 1-2 brief, helpful "
+        "sentences that directly answer their question based on the card data and "
+        "source documents below.\n\n"
+        f"Today's date is {today.strftime('%B %d, %Y')}. Use this to determine "
+        "whether dates are in the past or future.\n\n"
+        "Rules:\n"
+        "- Use the source_documents field (original academic calendar text) as your "
+        "primary source of truth. The card data summarizes it, but the source has full details.\n"
+        "- Do NOT repeat the full list of dates — just answer the question conversationally.\n"
+        "- Do NOT start with 'Based on the card' or similar meta-references."
+    )
 
 
 async def _generate_card_explanation(
@@ -525,10 +528,11 @@ async def _generate_card_explanation(
         payload_dict["source_documents"] = source_context[:2000]
     payload = json.dumps(payload_dict, ensure_ascii=False)
 
+    today = date.today()
     try:
         response = await Settings.llm.achat(
             messages=[
-                ChatMessage(role=MessageRole.SYSTEM, content=_CARD_EXPLANATION_PROMPT),
+                ChatMessage(role=MessageRole.SYSTEM, content=_card_explanation_prompt(today)),
                 ChatMessage(role=MessageRole.USER, content=payload),
             ],
         )

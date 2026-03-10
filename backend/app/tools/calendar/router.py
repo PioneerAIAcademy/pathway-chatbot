@@ -104,7 +104,7 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = (
 	"drop/add/refund/payment dates, graduation, or commencement. "
 	"'When is registration' = registration deadline (CALL the tool).\n"
 	"2. DO NOT call the tool for:\n"
-	"   - Simple date/time questions ('What is today's date?', 'What day is it?')\n"
+	"   - Simple date/time questions ('What is today?', 'What is today's date?', 'What day is it?', 'What time is it?')\n"
 	"   - How-to/process questions ('How do I register?', 'What steps to prepare?')\n"
 	"   - General knowledge questions unrelated to the academic calendar\n"
 	"   - Requests for 'text format' or 'list the dates' (they want plain text)\n"
