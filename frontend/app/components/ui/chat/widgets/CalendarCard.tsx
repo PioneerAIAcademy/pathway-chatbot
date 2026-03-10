@@ -501,9 +501,12 @@ export function CalendarCard({
                     <div className="text-[21px] sm:text-base font-bold leading-[1.08] sm:leading-[1.15] tracking-[-0.3px] text-[#3D3D3A] dark:text-[#e6edf3] break-words min-w-0 pr-1">
                       {cardData.title}
                     </div>
-                    <div className="shrink-0 pt-0.5">
+                    <div className="shrink-0 pt-0.5 hidden sm:block">
                       <StatusBadge status={cardData.status ?? "upcoming"} />
                     </div>
+                  </div>
+                  <div className="flex justify-end sm:hidden mt-1">
+                    <StatusBadge status={cardData.status ?? "upcoming"} />
                   </div>
                   {/* Light: gray-600 → 6.0:1 ✓ | Dark: gray-400 → 6.8:1 ✓  (was dark:gray-500 → 3.6:1 ❌) */}
                   <div className="text-[11px] sm:text-xs text-gray-600 dark:text-gray-400 mt-0.5 leading-tight pr-1">
