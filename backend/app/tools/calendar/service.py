@@ -494,6 +494,9 @@ def _card_explanation_prompt(today: date) -> str:
         "Rules:\n"
         "- Use the source_documents field (original academic calendar text) as your "
         "primary source of truth. The card data summarizes it, but the source has full details.\n"
+        "- If a key deadline has already passed, briefly mention when the next "
+        "block or term opens for that same thing (e.g. next registration window) "
+        "if that information is available in the source documents.\n"
         "- Do NOT repeat the full list of dates — just answer the question conversationally.\n"
         "- Do NOT start with 'Based on the card' or similar meta-references."
     )
