@@ -22,6 +22,25 @@
   margin-left: 20px;
 }
 
+/* External links in chat messages */
+.custom-markdown a[href^="http"] {
+  color: hsl(var(--link));
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  transition: color 150ms ease, text-decoration-style 150ms ease;
+}
+
+.custom-markdown a[href^="http"]:hover {
+  color: hsl(var(--link-hover));
+  text-decoration-style: solid;
+}
+
+.custom-markdown a[href^="http"]:visited {
+  color: hsl(var(--link-visited));
+}
+
 /* Reference list item styling */
 .reference-list-item {
   transition: background-color 300ms ease-in-out;
