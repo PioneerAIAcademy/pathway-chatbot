@@ -53,7 +53,7 @@ export function useFile() {
     requestParams: any = {},
   ): Promise<string[]> => {
     const base64 = await readContent({ file, asUrl: true });
-    const uploadAPI = `${backend}/api/chat/upload`;
+    const uploadAPI = `${backend}/api/v1/chat/upload`;
     const response = await fetch(uploadAPI, {
       method: "POST",
       headers: {

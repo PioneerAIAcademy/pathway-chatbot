@@ -36,7 +36,7 @@ export default function ChatSection() {
     setMessages,
   } = useChat({
     body: { data: requestData },
-    api: `${backend}/api/chat`,
+    api: `${backend}/api/v1/chat`,
     headers: {
       "Content-Type": "application/json",
       "X-Session-ID": getSessionId(),
