@@ -500,7 +500,21 @@ def _card_explanation_prompt(today: date) -> str:
         "- Do NOT repeat the full list of dates — just answer the question conversationally.\n"
         "- Do NOT start with 'Based on the card' or similar meta-references.\n"
         "- NEVER say you 'can\'t provide' or 'don\'t have' information that the card "
-        "already shows. The card IS your answer — summarize what it shows."
+        "already shows. The card IS your answer — summarize what it shows.\n\n"
+        "REGISTRATION STATUS CHECK (apply when the question is about registration):\n"
+        "- Registration is OPEN between the 'Registration Opens' date and the "
+        "'Add Course Deadline' (Day 1 of the block/semester).\n"
+        "- Registration is CLOSED after the Add Course Deadline has passed.\n"
+        f"- Compare these dates to today ({today.strftime('%B %d, %Y')}). "
+        "If the Add Course Deadline is before today, say registration is CLOSED "
+        "and mention when the NEXT registration window opens.\n"
+        "- If the 'Registration Opens' date is in the future, say registration "
+        "has NOT opened yet and state when it will open.\n"
+        "- 'Priority Registration Deadline' and 'Registration Opens' are "
+        "different labels for the same concept — the date registration opens. "
+        "The label varies by year.\n"
+        "- NEVER give false hope: if registration has closed, do NOT say students "
+        "'can register' or 'registration is available'."
     )
 
 

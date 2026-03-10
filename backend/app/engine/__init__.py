@@ -90,6 +90,12 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
     Block mapping: Block 1 = Winter first half, Block 2 = Winter second half, Block 3 = Spring first half, Block 4 = Spring second half, Block 5 = Fall first half, Block 6 = Fall second half.
     IMPORTANT: The semester after Winter is SPRING (not Summer). If a student is in Winter and asks about the next term, the answer is SPRING.
 
+    REGISTRATION LIFECYCLE (apply when answering registration questions):
+    - Registration has a WINDOW: it OPENS on the "Registration Opens" (or "Priority Registration Deadline") date and CLOSES on the "Add Course Deadline" (Day 1 of the block/semester). These labels vary by year but mean the same thing.
+    - After the Add Course Deadline passes, registration is CLOSED — students can NO LONGER register or add courses for that block.
+    - When a student asks "is registration open" or "can I still register", ALWAYS check the Add Course Deadline for the relevant block against today's date. If it has passed, clearly state registration is CLOSED and mention when the NEXT registration window opens.
+    - NEVER give false hope: if registration has closed, do NOT say students "can register" or imply registration is still available.
+
     - When a user requests a specific term (e.g., Term 2 in 2025):
         - Map the term based on the sequence above.
         - For Term 2 in 2025: Look for **Winter Term 2** in 2025.

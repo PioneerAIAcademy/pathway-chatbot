@@ -103,6 +103,12 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = (
 	"deadlines, block/term/semester schedules, registration windows/deadlines, "
 	"drop/add/refund/payment dates, graduation, or commencement. "
 	"'When is registration' = registration deadline (CALL the tool).\n"
+	"   REGISTRATION STATUS: If the user asks 'is registration open', "
+	"'can I still register', 'has registration closed', or any question about "
+	"whether registration is currently available, ALWAYS call the tool with "
+	"specific_deadline='registration'. The tool will retrieve the actual "
+	"Registration Opens and Add Course Deadline dates so the system can "
+	"determine if registration is open or closed.\n"
 	"2. DO NOT call the tool for:\n"
 	"   - Simple date/time questions ('What is today?', 'What is today's date?', 'What day is it?', 'What time is it?')\n"
 	"   - How-to/process questions ('How do I register?', 'What steps to prepare?')\n"
@@ -160,6 +166,12 @@ def _current_block_context(user_timezone: str) -> str:
 
 	season, block = _season_block_for_month(today.month)
 
+	# Compute the next block/season so the LLM doesn't have to guess
+	next_block = block + 1 if block < 6 else 1
+	next_year = today.year if block < 6 else today.year + 1
+	next_season_map = {1: "winter", 2: "winter", 3: "spring", 4: "spring", 5: "fall", 6: "fall"}
+	next_season = next_season_map[next_block]
+
 	return (
 		f"CURRENT DATE CONTEXT: Today is {today.isoformat()} "
 		f"({today.strftime('%A, %B %d, %Y')}). "
@@ -170,7 +182,18 @@ def _current_block_context(user_timezone: str) -> str:
 		f"Season order: Winter → Spring → Fall → Winter (next year). "
 		f"When the user says 'this term/block/semester', they mean "
 		f"{season.capitalize()} {today.year} Block {block} "
-		f"(season='{season}', block_number={block}, year={today.year})."
+		f"(season='{season}', block_number={block}, year={today.year}). "
+		f"When they say 'next term/block/semester' or 'next registration/deadline', "
+		f"they mean {next_season.capitalize()} {next_year} Block {next_block} "
+		f"(season='{next_season}', block_number={next_block}, year={next_year}). "
+		f"NEVER skip a season — 'next' after Winter is SPRING, not Fall.\n\n"
+		f"REGISTRATION LIFECYCLE: Each block has a registration WINDOW. "
+		f"Registration OPENS several weeks before the block starts "
+		f"(labeled 'Registration Opens' or 'Priority Registration Deadline'). "
+		f"Registration CLOSES on the Add Course Deadline, which is Day 1 of the block. "
+		f"After the Add Course Deadline, registration is CLOSED — students can NO "
+		f"LONGER register. Always route registration questions to the calendar tool "
+		f"so the actual dates can be checked."
 	)
 
 
