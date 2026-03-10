@@ -40,7 +40,7 @@ export default function ChatMessages(
 
   useEffect(() => {
     if (!starterQuestions) {
-      fetch(`${backend}/api/chat/config`)
+      fetch(`${backend}/api/v1/chat/config`)
         .then((response) => response.json())
         .then((data) => {
           if (data?.starterQuestions) {

@@ -298,7 +298,7 @@ export function GeneralFeedbackDrawer({ isOpen, onClose }: GeneralFeedbackDrawer
         form.append("screenshot", screenshotFile);
       }
 
-      const res = await fetch(`${backend}/api/chat/feedback/general`, {
+      const res = await fetch(`${backend}/api/v1/chat/feedback/general`, {
         method: "POST",
         headers: {
           "X-Session-ID": getSessionId(),

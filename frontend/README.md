@@ -2,13 +2,19 @@ This is a [LlamaIndex](https://www.llamaindex.ai/) project using [Next.js](https
 
 ## Getting Started
 
-First, install the dependencies:
+Install dependencies:
 
 ```
 npm install
 ```
 
-Second, run the development server:
+Copy `.env.local.example` to `.env.local` and fill in the required values:
+
+```
+cp .env.local.example .env.local
+```
+
+Run the development server:
 
 ```
 npm run dev
@@ -16,15 +22,47 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment Variables
 
-This project uses [`next/font`](https://nextjs.org/docs/basic-features/font-optimization) to automatically optimize and load Inter, a custom Google Font.
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `NEXT_PUBLIC_CHAT_API` | Yes | Backend base URL (e.g. `http://localhost:8000`) |
+| `NEXT_PUBLIC_API_KEY` | Yes | API key matching backend `API_KEYS` |
+| `NEXT_PUBLIC_SENTRY_DSN` | No | Sentry DSN for frontend error tracking |
 
-## Learn More
+> **Note:** `NEXT_PUBLIC_*` variables are baked into the bundle at build time. On Render, they must be set as **Build environment variables**, not just runtime variables.
 
-To learn more about LlamaIndex, take a look at the following resources:
+## API Routes Used
 
-- [LlamaIndex Documentation](https://docs.llamaindex.ai) - learn about LlamaIndex (Python features).
-- [LlamaIndexTS Documentation](https://ts.llamaindex.ai) - learn about LlamaIndex (Typescript features).
+All requests go to the backend at `NEXT_PUBLIC_CHAT_API`:
 
-You can check out [the LlamaIndexTS GitHub repository](https://github.com/run-llama/LlamaIndexTS) - your feedback and contributions are welcome!
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /api/v1/chat` | Streaming chat |
+| `GET /api/v1/chat/config` | Load frontend config |
+| `POST /api/v1/chat/upload` | File uploads |
+| `POST /api/v1/chat/thumbs_request` | Thumbs up/down feedback |
+| `POST /api/v1/chat/feedback/general` | General feedback with screenshot |
+
+## Security Headers
+
+The following headers are set on all responses via `next.config.json`:
+
+- `Content-Security-Policy` — restricts resource loading
+- `X-Frame-Options: DENY` — prevents clickjacking
+- `X-Content-Type-Options: nosniff` — prevents MIME sniffing
+
+## Error Tracking
+
+Sentry is configured for frontend error tracking in production. Set `NEXT_PUBLIC_SENTRY_DSN` to enable it. Errors are only reported when `NEXT_PUBLIC_SENTRY_DSN` is present.
+
+## Deployment (Render)
+
+Build command: `npm run build` (via Dockerfile)
+
+Required Render environment variables:
+```
+NEXT_PUBLIC_CHAT_API=https://your-backend.onrender.com
+NEXT_PUBLIC_API_KEY=your_api_key
+NEXT_PUBLIC_SENTRY_DSN=your_sentry_dsn
+```

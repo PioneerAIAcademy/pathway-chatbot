@@ -1,5 +1,6 @@
 "use client";
 
+import * as Sentry from "@sentry/nextjs";
 import { useChat } from "ai/react";
 import { useState, useEffect, useRef } from "react";
 import DisclaimerMessage from "./disclaimer-message";
@@ -13,6 +14,7 @@ export default function ChatSection() {
   const [requestData, setRequestData] = useState<any>();
   const [isAcmChecked, setIsAcmChecked] = useState(false);
   const [hasStartedChat, setHasStartedChat] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [deviceId, setDeviceId] = useState<string>("");
 
@@ -34,7 +36,7 @@ export default function ChatSection() {
     setMessages,
   } = useChat({
     body: { data: requestData },
-    api: `${backend}/api/chat`,
+    api: `${backend}/api/v1/chat`,
     headers: {
       "Content-Type": "application/json",
       "X-Session-ID": getSessionId(),
@@ -43,12 +45,19 @@ export default function ChatSection() {
     },
     onError: (error: unknown) => {
       if (!(error instanceof Error)) throw error;
+      let userMessage = "Something went wrong. Please try again.";
       try {
-        const message = JSON.parse(error.message);
-        alert(message.detail ?? error.message);
+        const parsed = JSON.parse(error.message);
+        userMessage = parsed.detail ?? error.message;
       } catch {
-        alert(error.message);
+        userMessage = error.message;
       }
+      // Report to Sentry for monitoring (silent — user never sees this)
+      Sentry.captureException(error, {
+        extra: { userMessage },
+      });
+      // Show inline error instead of blocking alert
+      setChatError(userMessage);
     },
   });
 
@@ -118,8 +127,22 @@ export default function ChatSection() {
         </div>
       )}
 
+      {/* Inline error banner */}
+      {chatError && (
+        <div className="mx-4 md:mx-8 lg:mx-16 xl:mx-24 2xl:mx-32 mb-2 px-4 py-2 rounded-md bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 flex items-center justify-between gap-2">
+          <p className="text-sm text-red-600 dark:text-red-400">{chatError}</p>
+          <button
+            onClick={() => setChatError(null)}
+            className="text-red-400 hover:text-red-600 dark:hover:text-red-300 text-lg leading-none"
+            aria-label="Dismiss error"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* Input area - positioned based on chat state */}
-      <div 
+      <div
         className={`w-full px-4 sm:px-6 md:px-8 lg:px-16 xl:px-24 2xl:px-32 pb-2 transition-all duration-500 ease-in-out ${
           !hasStartedChat && !hasMessages ? 'static' : 'sticky bottom-0'
         }`}

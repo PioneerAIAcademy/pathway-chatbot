@@ -10,7 +10,7 @@ export const sendUserFeedback = async (
     value: FeedbackValue,
     comment?: string
 ): Promise<boolean> => {
-    const uploadAPI = `${backend}/api/chat/thumbs_request`;
+    const uploadAPI = `${backend}/api/v1/chat/thumbs_request`;
     try {
         const body: { trace_id: string; value: FeedbackValue; comment?: string } = {
             trace_id: traceId,

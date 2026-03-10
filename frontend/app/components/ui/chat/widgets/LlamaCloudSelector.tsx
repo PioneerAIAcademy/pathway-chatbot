@@ -65,7 +65,7 @@ export function LlamaCloudSelector({
 
   useEffect(() => {
     if (process.env.NEXT_PUBLIC_USE_LLAMACLOUD === "true" && !config) {
-      fetch(`${backend}/api/chat/config/llamacloud`)
+      fetch(`${backend}/api/v1/chat/config/llamacloud`)
         .then((response) => response.json())
         .then((data) => {
           const pipeline = defaultPipeline ?? data.pipeline; // defaultPipeline will override pipeline in .env
