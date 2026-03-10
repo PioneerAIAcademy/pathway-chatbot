@@ -30,6 +30,13 @@ CALENDAR_PIPELINE_TIMEOUT: float = 45.0 * _TIMEOUT_MULTIPLIER
 CALENDAR_ONLY_TIMEOUT: float = 120.0 * _TIMEOUT_MULTIPLIER
 
 
+# ── Academic Calendar URL ────────────────────────────────────────────────
+
+ACADEMIC_CALENDAR_URL = (
+	"https://studentservices.byupathway.edu/studentservices/academic-calendar"
+)
+
+
 # ── Streaming Behaviour ─────────────────────────────────────────────────
 
 # In the mixed (RAG + calendar) path, wait until at least this many text

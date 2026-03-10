@@ -16,6 +16,7 @@ from app.api.routers.message_variations import get_retrieval_start_message
 from app.api.routers.models import ChatData, Message, SourceNodes
 from app.api.services.suggestion import NextQuestionSuggestion
 from app.tools.calendar.config import (
+    ACADEMIC_CALENDAR_URL,
     CALENDAR_ONLY_TIMEOUT,
     CALENDAR_PIPELINE_TIMEOUT,
     MIN_TOKENS_BEFORE_CALENDAR,
@@ -353,15 +354,18 @@ class VercelStreamResponse(StreamingResponse):
                     if isinstance(calendar_data, dict) and calendar_data.get("__calendar_error_reason") == "unsupported_year":
                         requested_year = calendar_data.get("requestedYear")
                         available_years = calendar_data.get("availableYears") or []
+                        calendar_link = f"For more information, visit the [Academic Calendar]({ACADEMIC_CALENDAR_URL})."
                         if available_years:
                             years_text = ", ".join(str(y) for y in available_years)
                             message = (
                                 f"I don't have verified academic calendar dates for {requested_year} yet. "
-                                f"I currently have official dates for: {years_text}."
+                                f"I currently have official dates for: {years_text}. "
+                                f"{calendar_link}"
                             )
                         else:
                             message = (
-                                f"I don't have verified academic calendar dates for {requested_year} yet."
+                                f"I don't have verified academic calendar dates for {requested_year} yet. "
+                                f"{calendar_link}"
                             )
                         final_response = message
                         for chunk in cls._iter_text_chunks(message):

@@ -28,9 +28,9 @@ from app.tools.calendar.vocabulary import event_matches_deadline
 
 logger = logging.getLogger("uvicorn")
 
-ACADEMIC_CALENDAR_SOURCE_URL = (
-	"https://studentservices.byupathway.edu/studentservices/academic-calendar"
-)
+from app.tools.calendar.config import ACADEMIC_CALENDAR_URL
+
+ACADEMIC_CALENDAR_SOURCE_URL = ACADEMIC_CALENDAR_URL
 
 
 def get_calendar_tool_definition() -> dict:

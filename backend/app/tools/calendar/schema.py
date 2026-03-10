@@ -66,9 +66,9 @@ class ExtractedBlockData(BaseModel):
 	events: list[ExtractedCalendarEvent] = []
 
 
-_DEFAULT_SOURCE_URL = (
-	"https://studentservices.byupathway.edu/studentservices/academic-calendar"
-)
+from app.tools.calendar.config import ACADEMIC_CALENDAR_URL
+
+_DEFAULT_SOURCE_URL = ACADEMIC_CALENDAR_URL
 
 
 class ExtractedCalendarData(BaseModel):
