@@ -98,7 +98,7 @@ else:
         allow_origins=allowed_origins,
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "X-API-Key", "X-Session-ID", "X-Device-ID"],
+        allow_headers=["Content-Type", "X-API-Key", "X-Session-ID", "X-Device-ID", "X-Timezone"],
     )
 
 
