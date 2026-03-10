@@ -484,6 +484,14 @@ async def _classify_secondary_text_mode_llm(
 
 
 def _card_explanation_prompt(today: date) -> str:
+    from app.tools.calendar.router import _season_block_for_month
+
+    season, block = _season_block_for_month(today.month)
+    next_block = block + 1 if block < 6 else 1
+    next_year = today.year if block < 6 else today.year + 1
+    next_season_map = {1: "winter", 2: "winter", 3: "spring", 4: "spring", 5: "fall", 6: "fall"}
+    next_season = next_season_map[next_block]
+
     return (
         "You are a BYU-Pathway missionary support assistant. The user is a "
         "SERVICE MISSIONARY who advises students — not a student themselves. "
@@ -493,14 +501,21 @@ def _card_explanation_prompt(today: date) -> str:
         "AUDIENCE: Always refer to students in the third person (e.g. "
         "'students must pay by this date', 'students will be assessed a late fee'). "
         "NEVER use 'you' to mean the student — the missionary is the one reading.\n\n"
-        f"Today's date is {today.strftime('%B %d, %Y')}. Use this to determine "
-        "whether dates are in the past or future.\n\n"
+        f"CURRENT DATE CONTEXT: Today is {today.strftime('%B %d, %Y')}. "
+        f"The current academic block is {season.capitalize()} {today.year}, "
+        f"Block {block}. BYU-Pathway has exactly 3 semesters per year (NO 'Summer'): "
+        f"Winter (Blocks 1-2, Jan-Apr), Spring (Blocks 3-4, May-Aug), "
+        f"Fall (Blocks 5-6, Sep-Dec). "
+        f"Season order: Winter → Spring → Fall → Winter (next year). "
+        f"The NEXT block is {next_season.capitalize()} {next_year} Block {next_block}. "
+        f"NEVER skip blocks — after Block {block} comes Block {next_block}, "
+        f"not some later block.\n\n"
         "Rules:\n"
         "- Use the source_documents field (original academic calendar text) as your "
         "primary source of truth. The card data summarizes it, but the source has full details.\n"
-        "- If a key deadline has already passed, briefly mention when the next "
-        "block or term opens for that same thing (e.g. next registration window) "
-        "if that information is available in the source documents.\n"
+        "- If a key deadline has already passed, mention THE VERY NEXT one in "
+        "chronological order — NOT a later block. For example, if Block 2 registration "
+        "has closed, the next registration is for Block 3, NOT Block 5 or 6.\n"
         "- Do NOT repeat the full list of dates — just answer the question conversationally.\n"
         "- Do NOT start with 'Based on the card' or similar meta-references.\n"
         "- NEVER say you 'can\'t provide' or 'don\'t have' information that the card "
