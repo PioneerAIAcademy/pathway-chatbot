@@ -395,6 +395,7 @@ class VercelStreamResponse(StreamingResponse):
                             )
                             for chunk in cls._iter_text_chunks(f"\n\n{post_card_text}"):
                                 yield cls.convert_text(chunk)
+                                await asyncio.sleep(0.02)
 
                         if supplemental_text_pipeline is not None:
                             try:
