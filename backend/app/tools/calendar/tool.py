@@ -572,7 +572,14 @@ def build_calendar_card(
 
 	normalized_title = extracted.title
 	normalized_subtitle = extracted.subtitle or ""
-	if args.query_type.value == "block" and args.block_number:
+	scope = (getattr(args, "scope", "term") or "term")
+	scope_val = scope.value if hasattr(scope, "value") else str(scope)
+
+	if scope_val == "full_year":
+		normalized_title = f"{args.year} Academic Calendar"
+	elif args.query_type.value == "semester" and args.season:
+		normalized_title = f"{args.season.capitalize()} {args.year}"
+	elif args.query_type.value == "block" and args.block_number:
 		season = _season_for_block(args.block_number) or args.season
 		if season:
 			normalized_title = f"{season.capitalize()} {args.year} — Block {args.block_number}"

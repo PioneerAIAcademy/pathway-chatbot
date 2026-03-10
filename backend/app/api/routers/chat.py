@@ -484,6 +484,12 @@ async def chat(
 
             return response
 
+        async def _rag_fallback_for_calendar():
+            """If calendar pipeline times out, answer via normal RAG."""
+            engine = get_chat_engine(filters=filters, params=params)
+            engine.callback_manager.handlers.append(event_handler)
+            return await engine.astream_chat(last_message_content, messages)
+
         streaming_response_returned = True
         return VercelStreamResponse(
             request,
@@ -498,6 +504,7 @@ async def chat(
             calendar_pipeline=_calendar_pipeline,
             calendar_intro=calendar_intro,
             supplemental_text_pipeline=_calendar_secondary_text_pipeline,
+            rag_fallback=_rag_fallback_for_calendar,
         )
         # return VercelStreamResponse(request, event_handler, response, data, tokens)
     except Exception as e:

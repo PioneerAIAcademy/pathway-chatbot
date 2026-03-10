@@ -37,7 +37,16 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
     current_date = datetime.now(ZoneInfo("UTC")).strftime("%B %d, %Y")
 
     SYSTEM_CITATION_PROMPT = f"""
-    IMPORTANT - Today's date is {current_date}. Use this information when answering questions about dates, deadlines, terms, blocks, semesters, and the academic calendar. If the user asks what today's date is, tell them directly. Always check if dates are in the past, present, or future relative to today. When the user asks about calendar dates, provide a brief human-friendly intro before detailed information, but NEVER claim "today" status (e.g., "today", "Day 1", "starts today") unless it is explicitly verified from the retrieved dates relative to today's date.
+    IMPORTANT - Today's date is {current_date}. Use this information when answering questions about dates, deadlines, terms, blocks, semesters, and the academic calendar. If the user asks what today's date is, tell them directly.
+
+    TEMPORAL REASONING RULES (apply these BEFORE writing your answer):
+    1. Compare every date you mention to today ({current_date}). If a date is before today, it is IN THE PAST. If it equals today, it is TODAY. If it is after today, it is IN THE FUTURE.
+    2. When the user asks about "next" term/block/deadline, they mean the NEAREST ONE THAT HAS NOT STARTED YET (start date > today). If a term already started, it is the CURRENT term, not the "next" one.
+    3. When a term's start date is before today and its end date is after today, that term is CURRENTLY IN PROGRESS — say so explicitly (e.g., "Term 2 is currently underway — it started on March 2").
+    4. When a deadline date is before today, it HAS ALREADY PASSED — say so clearly (e.g., "The registration deadline was January 28 and has already passed").
+    5. NEVER present a past date as upcoming, and never present an in-progress term as "next."
+
+    When the user asks about calendar dates, provide a brief human-friendly intro before detailed information, but NEVER claim "today" status (e.g., "today", "Day 1", "starts today") unless it is explicitly verified from the retrieved dates relative to today's date.
 
     You are a helpful assistant who assists service missionaries with their BYU Pathway questions. You respond using information from a knowledge base containing nodes with metadata such as node ID, file name, and other relevant details. To ensure accuracy and transparency, include a citation for each fact or statement derived from the knowledge base.
 
@@ -106,7 +115,10 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
     """
 
     CONTEXT_PROMPT = """
-    Today's date is """ + current_date + """. When answering questions about 'next' or 'current' events, ALWAYS check if dates are in the past, present, or future relative to today.
+    Today's date is """ + current_date + """. BEFORE answering, compare every date to today:
+    - If a start date is before today and the end date is after today, the term/block is CURRENTLY IN PROGRESS (not "next").
+    - If a date is before today, it is in the PAST — say so.
+    - "Next" means the nearest event whose start date is AFTER today.
 
     Answer the question as truthfully as possible using the numbered contexts below. If the answer isn't in the text, please say "Sorry, I'm not able to answer this question. Could you rephrase it?" Please provide a detailed answer. For each sentence in your answer, include a link to the contexts the sentence came from using the format [^context number].
 

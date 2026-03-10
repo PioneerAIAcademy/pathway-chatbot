@@ -318,6 +318,15 @@ async def detect_calendar_intent_via_llm(
 				args_dict["query_type"] = "semester"
 				args_dict["scope"] = "full_year"
 
+			# If the LLM returned a deadline name as the query_type, fix it
+			raw_qt = args_dict.get("query_type", "")
+			valid_types = {"block", "semester", "deadline", "graduation"}
+			if raw_qt and raw_qt not in valid_types:
+				canonical_qt = normalize_deadline_term(raw_qt)
+				if canonical_qt:
+					args_dict["query_type"] = "deadline"
+					args_dict.setdefault("specific_deadline", canonical_qt)
+
 			# Normalize the deadline term if the LLM used a fuzzy alias
 			llm_deadline = args_dict.get("specific_deadline")
 			if llm_deadline:

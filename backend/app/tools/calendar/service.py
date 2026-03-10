@@ -498,7 +498,9 @@ def _card_explanation_prompt(today: date) -> str:
         "block or term opens for that same thing (e.g. next registration window) "
         "if that information is available in the source documents.\n"
         "- Do NOT repeat the full list of dates — just answer the question conversationally.\n"
-        "- Do NOT start with 'Based on the card' or similar meta-references."
+        "- Do NOT start with 'Based on the card' or similar meta-references.\n"
+        "- NEVER say you 'can\'t provide' or 'don\'t have' information that the card "
+        "already shows. The card IS your answer — summarize what it shows."
     )
 
 
@@ -527,6 +529,15 @@ async def _generate_card_explanation(
         } if spotlight else None,
         "key_events": event_summaries,
     }
+    tabs = card.get("tabs") or []
+    if tabs:
+        tab_summaries = []
+        for tab in tabs:
+            label = tab.get("label", "")
+            tab_events = tab.get("events") or []
+            tab_event_names = [e.get("name", "") for e in tab_events[:4] if isinstance(e, dict)]
+            tab_summaries.append(f"{label}: {len(tab_events)} events ({', '.join(tab_event_names)})")
+        payload_dict["blocks_shown"] = tab_summaries
     if source_context:
         payload_dict["source_documents"] = source_context[:2000]
     payload = json.dumps(payload_dict, ensure_ascii=False)

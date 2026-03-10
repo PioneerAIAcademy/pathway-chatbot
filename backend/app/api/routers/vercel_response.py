@@ -1,4 +1,4 @@
-import asyncio
+import asyncio 
 import inspect
 import json
 import logging
@@ -15,20 +15,14 @@ from app.api.routers.events import EventCallbackHandler
 from app.api.routers.message_variations import get_retrieval_start_message
 from app.api.routers.models import ChatData, Message, SourceNodes
 from app.api.services.suggestion import NextQuestionSuggestion
+from app.tools.calendar.config import (
+    CALENDAR_ONLY_TIMEOUT,
+    CALENDAR_PIPELINE_TIMEOUT,
+    MIN_TOKENS_BEFORE_CALENDAR,
+)
 from app.utils.date_spans import extract_date_spans
 
 logger = logging.getLogger("uvicorn")
-
-# Timeout for the calendar pipeline (seconds).
-# Pipeline involves: LLM tool-choice call + Pinecone retrieval + LLM extraction.
-_CALENDAR_TIMEOUT = 45.0
-
-# Calendar-only requests can legitimately take longer because the entire answer
-# depends on retrieval + extraction. Keep this separate from mixed RAG path.
-_CALENDAR_ONLY_TIMEOUT = 120.0
-
-# Emit calendar patches after this many text tokens have streamed
-_MIN_TOKENS_BEFORE_CALENDAR = 15
 
 
 class VercelStreamResponse(StreamingResponse):
@@ -81,6 +75,9 @@ class VercelStreamResponse(StreamingResponse):
         supplemental_text_pipeline: Optional[
             Callable[[dict], Awaitable[Optional[dict[str, Any]]]]
         ] = None,
+        rag_fallback: Optional[
+            Callable[[], Awaitable[StreamingAgentChatResponse]]
+        ] = None,
     ):
         content = VercelStreamResponse.content_generator(
             request,
@@ -95,6 +92,7 @@ class VercelStreamResponse(StreamingResponse):
             calendar_pipeline,
             calendar_intro,
             supplemental_text_pipeline,
+            rag_fallback,
         )
         super().__init__(content=content, media_type="text/plain")
 
@@ -114,6 +112,9 @@ class VercelStreamResponse(StreamingResponse):
         calendar_intro: Optional[str] = None,
         supplemental_text_pipeline: Optional[
             Callable[[dict], Awaitable[Optional[dict[str, Any]]]]
+        ] = None,
+        rag_fallback: Optional[
+            Callable[[], Awaitable[StreamingAgentChatResponse]]
         ] = None,
     ):
         final_response = ""
@@ -164,7 +165,7 @@ class VercelStreamResponse(StreamingResponse):
                         not calendar_emitted
                         and calendar_task is not None
                         and (
-                            token_count >= _MIN_TOKENS_BEFORE_CALENDAR
+                            token_count >= MIN_TOKENS_BEFORE_CALENDAR
                             or "." in final_response
                         )
                     ):
@@ -274,7 +275,7 @@ class VercelStreamResponse(StreamingResponse):
                         loop = asyncio.get_running_loop()
                         started_at = loop.time()
                         while True:
-                            remaining = _CALENDAR_ONLY_TIMEOUT - (loop.time() - started_at)
+                            remaining = CALENDAR_ONLY_TIMEOUT - (loop.time() - started_at)
                             if remaining <= 0:
                                 raise asyncio.TimeoutError
 
@@ -290,31 +291,64 @@ class VercelStreamResponse(StreamingResponse):
                                 # is still running.
                                 yield cls.convert_text("")
                     except asyncio.TimeoutError:
-                        fallback = "I couldn’t load the academic calendar right now. Please try again."
-                        final_response = fallback
-                        for chunk in cls._iter_text_chunks(fallback):
-                            yield cls.convert_text(chunk)
-                        yield cls.convert_data(
-                            {
-                                "type": "calendar_error",
-                                "data": {"reason": "timeout"},
-                                "trace_id": trace_id,
-                            }
-                        )
+                        # Calendar timed out — try RAG fallback so the
+                        # student still gets a useful answer.
+                        logger.warning("Calendar-only path timed out after %.0fs", CALENDAR_ONLY_TIMEOUT)
                         calendar_data = None
-                    except Exception:
-                        fallback = "I couldn’t load the academic calendar right now. Please try again."
-                        final_response = fallback
-                        for chunk in cls._iter_text_chunks(fallback):
-                            yield cls.convert_text(chunk)
-                        yield cls.convert_data(
-                            {
-                                "type": "calendar_error",
-                                "data": {"reason": "error"},
-                                "trace_id": trace_id,
-                            }
-                        )
+                        rag_used = False
+                        if rag_fallback is not None:
+                            try:
+                                fallback_resp = await rag_fallback()
+                                async for token in fallback_resp.async_response_gen():
+                                    final_response += token
+                                    yield cls.convert_text(token)
+                                supplemental_source_nodes = list(
+                                    getattr(fallback_resp, "source_nodes", []) or []
+                                )
+                                rag_used = True
+                            except Exception as rag_err:
+                                logger.error("RAG fallback also failed: %s", rag_err)
+                        if not rag_used:
+                            fallback_msg = "I couldn't load the academic calendar right now. Please try again."
+                            final_response = fallback_msg
+                            for chunk in cls._iter_text_chunks(fallback_msg):
+                                yield cls.convert_text(chunk)
+                            yield cls.convert_data(
+                                {
+                                    "type": "calendar_error",
+                                    "data": {"reason": "timeout"},
+                                    "trace_id": trace_id,
+                                }
+                            )
+                    except Exception as exc:
+                        # Calendar crashed — same fallback logic.
+                        logger.error("Calendar-only path error: %s", exc, exc_info=True)
                         calendar_data = None
+                        rag_used = False
+                        if rag_fallback is not None:
+                            try:
+                                fallback_resp = await rag_fallback()
+                                async for token in fallback_resp.async_response_gen():
+                                    final_response += token
+                                    yield cls.convert_text(token)
+                                supplemental_source_nodes = list(
+                                    getattr(fallback_resp, "source_nodes", []) or []
+                                )
+                                rag_used = True
+                            except Exception as rag_err:
+                                logger.error("RAG fallback also failed: %s", rag_err)
+                        if not rag_used:
+                            fallback_msg = "I couldn't load the academic calendar right now. Please try again."
+                            final_response = fallback_msg
+                            for chunk in cls._iter_text_chunks(fallback_msg):
+                                yield cls.convert_text(chunk)
+                            yield cls.convert_data(
+                                {
+                                    "type": "calendar_error",
+                                    "data": {"reason": "error"},
+                                    "trace_id": trace_id,
+                                }
+                            )
 
                     if isinstance(calendar_data, dict) and calendar_data.get("__calendar_error_reason") == "unsupported_year":
                         requested_year = calendar_data.get("requestedYear")
@@ -322,12 +356,12 @@ class VercelStreamResponse(StreamingResponse):
                         if available_years:
                             years_text = ", ".join(str(y) for y in available_years)
                             message = (
-                                f"I don’t have verified academic calendar dates for {requested_year} yet. "
+                                f"I don't have verified academic calendar dates for {requested_year} yet. "
                                 f"I currently have official dates for: {years_text}."
                             )
                         else:
                             message = (
-                                f"I don’t have verified academic calendar dates for {requested_year} yet."
+                                f"I don't have verified academic calendar dates for {requested_year} yet."
                             )
                         final_response = message
                         for chunk in cls._iter_text_chunks(message):
@@ -386,7 +420,7 @@ class VercelStreamResponse(StreamingResponse):
                                 for chunk in cls._iter_text_chunks(f"\n\n{extra_text}"):
                                     yield cls.convert_text(chunk)
                     elif calendar_data is None and not final_response:
-                        fallback = "I couldn’t find calendar data for that request."
+                        fallback = "I couldn't find calendar data for that request."
                         final_response = fallback
                         for chunk in cls._iter_text_chunks(fallback):
                             yield cls.convert_text(chunk)
@@ -476,7 +510,7 @@ async def _resolve_calendar_patches(
 
     try:
         logger.info("_resolve_calendar_patches: awaiting pipeline task...")
-        calendar_data = await asyncio.wait_for(calendar_task, timeout=_CALENDAR_TIMEOUT)
+        calendar_data = await asyncio.wait_for(calendar_task, timeout=CALENDAR_PIPELINE_TIMEOUT)
         logger.info(f"_resolve_calendar_patches: pipeline returned, data is {'present' if calendar_data else 'None'}")
     except asyncio.TimeoutError:
         logger.warning("Calendar pipeline timed out")
@@ -501,12 +535,12 @@ async def _resolve_calendar_patches(
         if available_years:
             years_text = ", ".join(str(y) for y in available_years)
             message = (
-                f" I don’t have verified academic calendar dates for {requested_year} yet. "
+                f" I don't have verified academic calendar dates for {requested_year} yet. "
                 f"I currently have official dates for: {years_text}."
             )
         else:
             message = (
-                f" I don’t have verified academic calendar dates for {requested_year} yet."
+                f" I don't have verified academic calendar dates for {requested_year} yet."
             )
 
         patches.append(VercelStreamResponse.convert_text(message))

@@ -18,10 +18,12 @@ import type {
 import styles from "./CalendarCard.module.css";
 
 // --- Urgency color classes ---
-// Light mode: all text colors meet WCAG AA (≥4.5:1 on #f5f4f0 card bg)
-// - amber-700 (#b45309) → 6.1:1 ✓  (replaces amber-600 ~3.3:1 and yellow ~1.5:1)
-// - blue-700  (#1d4ed8) → 6.8:1 ✓  (replaces blue-500  ~3.8:1)
-// - red-600   (#dc2626) → 5.4:1 ✓  (red-500 was ~4.1:1, borderline)
+// Light mode:  all text on #f5f4f0 card bg — WCAG AA (≥4.5:1)
+//   amber-700 (#b45309) → 6.1:1 ✓ | blue-700 (#1d4ed8) → 6.8:1 ✓ | red-600 (#dc2626) → 5.4:1 ✓
+// Dark mode:   all text on #161b22 card bg — WCAG AA (≥4.5:1)
+//   amber-300 (#fcd34d) → 12.0:1 ✓ | amber-400 (#fbbf24) → 10.4:1 ✓
+//   blue-400  (#60a5fa) →  6.8:1 ✓ | red-400  (#f87171)  →  6.3:1 ✓
+//   gray-400  (#9ca3af) →  6.8:1 ✓ (minimum muted tone that passes on #161b22)
 const urgencyClasses = {
   urgent: {
     bg: "bg-red-500/[0.07] dark:bg-red-500/[0.08]",
@@ -41,8 +43,6 @@ const urgencyClasses = {
     bg: "bg-[hsl(var(--header-bg))]/[0.07] dark:bg-[hsl(var(--header-bg))]/[0.05]",
     border:
       "border-[hsl(var(--header-bg))]/15 dark:border-[hsl(var(--header-bg))]/15",
-    // Was: text-[hsl(var(--header-bg))] = #FFC328 yellow → ~1.5:1 on light bg (critical fail)
-    // Fix: text-amber-700 = #b45309 → 6.1:1 ✓
     dateText: "text-amber-700 dark:text-amber-300",
     countdownBg: "bg-amber-700/10 dark:bg-amber-400/10",
     countdownText: "text-amber-700 dark:text-amber-300",
@@ -50,7 +50,6 @@ const urgencyClasses = {
   calm: {
     bg: "bg-blue-500/[0.06] dark:bg-blue-500/[0.07]",
     border: "border-blue-500/15 dark:border-blue-500/15",
-    // Was: text-blue-500 → ~3.8:1 (fail). Fix: text-blue-700 → 6.8:1 ✓
     dateText: "text-blue-700 dark:text-blue-400",
     countdownBg: "bg-blue-500/10 dark:bg-blue-500/10",
     countdownText: "text-blue-700 dark:text-blue-400",
@@ -67,13 +66,14 @@ const statusPipClass: Record<string, string> = {
 };
 
 const statusPillClass: Record<string, string> = {
-  // gray-600 (#4b5563) → 6.0:1 on #f5f4f0 ✓  (was gray-500 → 3.7:1)
-  past: "bg-gray-200/60 dark:bg-white/[0.03] text-gray-600 dark:text-gray-500",
+  // Light: gray-600 (#4b5563) → 6.0:1 ✓ on #f5f4f0
+  // Dark:  gray-400 (#9ca3af) → 6.8:1 ✓ on #161b22  (was dark:gray-500 → 3.6:1 ❌)
+  past: "bg-gray-200/60 dark:bg-white/[0.03] text-gray-600 dark:text-gray-400",
   today:
     "bg-green-500/10 dark:bg-green-400/10 text-green-700 dark:text-green-400",
-  // amber-700 → 6.1:1 ✓  (was amber-600 → ~3.3:1)
+  // Light: amber-700 → 6.1:1 ✓ | Dark: amber-400 → 10.4:1 ✓
   soon: "bg-amber-500/10 dark:bg-amber-400/10 text-amber-700 dark:text-amber-400",
-  // blue-700 → 6.8:1 ✓  (was blue-500 → ~3.8:1)
+  // Light: blue-700 → 6.8:1 ✓ | Dark: blue-400 → 6.8:1 ✓
   upcoming:
     "bg-blue-500/8 dark:bg-blue-400/8 text-blue-700 dark:text-blue-400",
 };
@@ -121,7 +121,6 @@ function StatusBadge({ status }: { status: CalendarCardData["status"] }) {
   }
   if (status === "upcoming") {
     return (
-      // blue-700 → 6.8:1 ✓  (was blue-500 → ~3.8:1)
       <span className="text-[10px] sm:text-[11px] font-semibold text-blue-700 dark:text-blue-400 bg-blue-500/8 dark:bg-blue-400/8 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full whitespace-nowrap">
         Upcoming
       </span>
@@ -171,7 +170,7 @@ function SpotlightBanner({
           </div>
         </div>
         {spotlight.description && (
-          // gray-600 → 6.0:1 ✓  (was gray-500 → 3.7:1)
+          // Light: gray-600 → 6.0:1 ✓ | Dark: gray-400 → 6.8:1 ✓
           <div className="text-[11.5px] sm:text-[12.5px] text-gray-600 dark:text-gray-400 leading-relaxed mt-0.5">
             {spotlight.description}
           </div>
@@ -198,7 +197,6 @@ function TimelineRow({
   loaded: boolean;
 }) {
   if (!loaded) {
-    // Skeleton content — same layout, shimmer placeholders
     return (
       <div
         className={`${styles.skeletonRow} flex items-start px-2.5 sm:px-3 py-2 sm:py-2.5 rounded-lg gap-2 sm:gap-3`}
@@ -225,7 +223,6 @@ function TimelineRow({
     );
   }
 
-  // Real content
   const eventDate = new Date(event.date + "T00:00:00");
   const monthStr = eventDate.toLocaleDateString("en-US", { month: "short" });
   const dayStr = eventDate.getDate();
@@ -242,13 +239,20 @@ function TimelineRow({
         className={`${styles.rowContentReveal} w-9 sm:w-[42px] text-center shrink-0 pt-0.5`}
       >
         <div
-          // gray-500 → 3.7:1 fails for past; use gray-600 → 6.0:1 ✓
-          className={`text-[8.5px] sm:text-[9px] font-bold uppercase tracking-[0.5px] ${isPast ? "text-gray-500 dark:text-gray-600" : "text-gray-600 dark:text-gray-500"}`}
+          // Light: gray-600 → 6.0:1 ✓ both states
+          // Dark:  gray-400 → 6.8:1 ✓ both states  (was dark:gray-600 → 2.3:1 ❌ / dark:gray-500 → 3.6:1 ❌)
+          // Visual de-emphasis for past events is preserved via the pastEvent CSS class (strikethrough/opacity)
+          className={`text-[8.5px] sm:text-[9px] font-bold uppercase tracking-[0.5px] text-gray-600 dark:text-gray-400`}
         >
           {monthStr}
         </div>
         <div
-          className={`text-[17px] sm:text-[19px] font-bold leading-tight ${isPast ? "text-gray-500 dark:text-gray-600" : "text-[#3D3D3A] dark:text-[#e6edf3]"}`}
+          // Past: gray-600 / gray-400 (see above) | Active: primary text colors
+          className={`text-[17px] sm:text-[19px] font-bold leading-tight ${
+            isPast
+              ? "text-gray-600 dark:text-gray-400"
+              : "text-[#3D3D3A] dark:text-[#e6edf3]"
+          }`}
         >
           {dayStr}
         </div>
@@ -263,17 +267,22 @@ function TimelineRow({
       {/* Event name + description */}
       <div className={`${styles.rowContentReveal} flex-1 min-w-0 pt-0.5`}>
         <div
+          // Past: gray-600 / gray-400 | Active: primary text colors
+          // Dark past was dark:gray-600 → 2.3:1 ❌ → fixed to dark:gray-400 → 6.8:1 ✓
           className={`text-[12.5px] sm:text-[13.5px] font-medium leading-snug ${
             isPast
-              ? `text-gray-500 dark:text-gray-600 ${styles.pastEvent}`
+              ? `text-gray-600 dark:text-gray-400 ${styles.pastEvent}`
               : "text-[#3D3D3A] dark:text-[#e6edf3]"
           }`}
         >
           {event.name}
         </div>
         {hasDescription && (
-          // gray-600 → 6.0:1 ✓  (was gray-500 → ~3.7:1)
-          <div className="text-[10.5px] sm:text-[11px] text-gray-600 dark:text-[#6e7681] leading-snug mt-px">
+          // Light: gray-600 → 6.0:1 ✓
+          // Dark: #8b949e → 5.6:1 ✓  (was #6e7681 → 3.8:1 ❌)
+          // Using #8b949e rather than gray-400 to preserve a lighter secondary-text feel
+          // while still clearing AA. (GitHub dark palette secondary text token.)
+          <div className="text-[10.5px] sm:text-[11px] text-gray-600 dark:text-[#8b949e] leading-snug mt-px">
             {event.description}
           </div>
         )}
@@ -292,8 +301,8 @@ function TimelineRow({
 // --- Section Label ---
 function SectionLabel({ label }: { label: string }) {
   return (
-    // gray-500 → 3.7:1 fails; gray-600 → 6.0:1 ✓  (was gray-400 → 2.6:1)
-    <div className="text-[9px] sm:text-[10px] font-bold text-gray-500 dark:text-gray-600 uppercase tracking-widest px-2.5 sm:px-3 pt-2 sm:pt-2.5 pb-1">
+    // Light: gray-500 | Dark: gray-400 → 6.8:1 ✓  (was dark:gray-600 → 2.3:1 ❌)
+    <div className="text-[9px] sm:text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest px-2.5 sm:px-3 pt-2 sm:pt-2.5 pb-1">
       {label}
     </div>
   );
@@ -364,7 +373,6 @@ export function CalendarCard({
   state?: CalendarCardState;
   append?: Pick<ChatHandler, "append">["append"];
 }) {
-  // Merge state and/or data into a unified view
   const cardData: Partial<CalendarCardData> = useMemo(() => {
     if (data) return data;
     if (!state) return {};
@@ -389,7 +397,6 @@ export function CalendarCard({
     cardData.tabs?.findIndex((t) => t.active) ?? 0,
   );
 
-  // For functional tab switching: use tab-specific events if available
   const displayEvents = useMemo(() => {
     if (
       cardData.tabs &&
@@ -401,24 +408,17 @@ export function CalendarCard({
     return cardData.events ?? [];
   }, [activeTab, cardData.tabs, cardData.events]);
 
-  // Data is "ready" once we have at least header info
   const dataReady = !!cardData.title;
 
-  // ---------------------------------------------------------------
-  // Frame drawing starts on mount (card is always the same DOM node).
-  // Content reveal timer starts when data arrives.
-  // ---------------------------------------------------------------
   const [mounted, setMounted] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [showStallNotice, setShowStallNotice] = useState(false);
 
-  // Card frame animation — starts immediately on mount
   useEffect(() => {
     const id = requestAnimationFrame(() => setMounted(true));
     return () => cancelAnimationFrame(id);
   }, []);
 
-  // Elapsed timer — starts when data arrives
   useEffect(() => {
     if (!dataReady) return;
     const start = Date.now();
@@ -438,15 +438,12 @@ export function CalendarCard({
       setShowStallNotice(false);
       return;
     }
-
     const stallId = setTimeout(() => {
       setShowStallNotice(true);
     }, 16000);
-
     return () => clearTimeout(stallId);
   }, [dataReady, state?.phase]);
 
-  // Section visibility based on elapsed time
   const headerLoaded = dataReady && elapsed >= TIMING.header;
   const tabsLoaded = dataReady && elapsed >= TIMING.tabs;
   const spotlightLoaded = dataReady && elapsed >= TIMING.spotlight;
@@ -457,7 +454,6 @@ export function CalendarCard({
     TIMING.footerDelay;
   const showFooter = dataReady && elapsed >= footerAt;
 
-  // Group events by section (only used once timeline is loaded)
   const sections: { label: string; events: CalendarEvent[] }[] = useMemo(() => {
     const result: { label: string; events: CalendarEvent[] }[] = [];
     let currentSection = "";
@@ -472,7 +468,6 @@ export function CalendarCard({
     return result;
   }, [displayEvents]);
 
-  // How many rows to render: keep stable to avoid layout jumps
   const rowCount = timelineStarted
     ? Math.max(SKELETON_ROW_COUNT, displayEvents.length)
     : SKELETON_ROW_COUNT;
@@ -481,11 +476,9 @@ export function CalendarCard({
 
   return (
     <div className="flex flex-col gap-3">
-      {/* The card — never unmounts, content transitions in-place */}
       <div
         className={`${styles.card} ${mounted ? styles.ready : ""} bg-[#f5f4f0] dark:bg-[#161b22] rounded-2xl overflow-hidden max-w-full`}
       >
-        {/* Card frame — 6 lines draw the border from center outward */}
         <div className={styles.cardFrame} aria-hidden="true">
           <span className={`${styles.frameLine} ${styles.topLeft}`} />
           <span className={`${styles.frameLine} ${styles.topRight}`} />
@@ -495,17 +488,14 @@ export function CalendarCard({
           <span className={`${styles.frameLine} ${styles.bottomRight}`} />
         </div>
 
-        {/* Header — container always present, content swaps in-place */}
+        {/* Header */}
         <div className="px-3 sm:px-5 pt-3 sm:pt-4 pb-2.5 sm:pb-3 flex items-center justify-between gap-2.5 sm:gap-3">
           {headerLoaded ? (
-            <div
-              className={`${styles.headerReveal} w-full min-w-0`}
-            >
+            <div className={`${styles.headerReveal} w-full min-w-0`}>
               <div className="flex items-start gap-2 sm:gap-3 min-w-0">
                 <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-[hsl(var(--header-bg))] to-amber-500 flex items-center justify-center shadow-[0_4px_12px_rgba(255,195,40,0.18)] shrink-0 mt-0.5">
                   <CardIcon type={cardData.type ?? "block"} />
                 </div>
-
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-1.5 sm:gap-2 min-w-0">
                     <div className="text-[21px] sm:text-base font-bold leading-[1.08] sm:leading-[1.15] tracking-[-0.3px] text-[#3D3D3A] dark:text-[#e6edf3] break-words min-w-0 pr-1">
@@ -515,9 +505,8 @@ export function CalendarCard({
                       <StatusBadge status={cardData.status ?? "upcoming"} />
                     </div>
                   </div>
-
-                  {/* gray-600 → 6.0:1 ✓  (was gray-500 → ~3.7:1) */}
-                  <div className="text-[11px] sm:text-xs text-gray-600 dark:text-gray-500 mt-0.5 leading-tight pr-1">
+                  {/* Light: gray-600 → 6.0:1 ✓ | Dark: gray-400 → 6.8:1 ✓  (was dark:gray-500 → 3.6:1 ❌) */}
+                  <div className="text-[11px] sm:text-xs text-gray-600 dark:text-gray-400 mt-0.5 leading-tight pr-1">
                     {cardData.subtitle}
                   </div>
                 </div>
@@ -540,7 +529,7 @@ export function CalendarCard({
           )}
         </div>
 
-        {/* Spotlight — show shimmer while loading, real content when ready, nothing if no spotlight */}
+        {/* Spotlight */}
         {!dataReady ? (
           <div className="mx-2.5 sm:mx-3.5 mb-2.5 sm:mb-3.5">
             <div
@@ -553,7 +542,7 @@ export function CalendarCard({
           </div>
         ) : null}
 
-        {/* Tabs (semester view) — mounts when ready */}
+        {/* Tabs */}
         {tabsLoaded && cardData.tabs && cardData.tabs.length > 0 && (
           <div
             className={`${styles.tabs} ${styles.hideScrollbar} px-2.5 sm:px-4 mb-1 overflow-x-auto`}
@@ -565,9 +554,11 @@ export function CalendarCard({
                   onClick={() => setActiveTab(i)}
                   className={`text-[10.5px] sm:text-[11.5px] font-medium px-2.5 sm:px-3.5 py-1 sm:py-1.5 rounded-t-lg border-b-2 transition-colors cursor-pointer whitespace-nowrap ${
                     i === activeTab
-                      // amber-700 text → 6.1:1 ✓  (was yellow hsl(--header-bg) → ~1.5:1)
+                      // Active — Light: amber-700 → 6.1:1 ✓ | Dark: amber-300 → 12.0:1 ✓
                       ? `${styles.tabActive} text-amber-700 dark:text-amber-300 border-amber-700 dark:border-amber-300 bg-amber-700/5 dark:bg-amber-400/5 font-semibold`
-                      : "text-gray-500 dark:text-gray-600 border-transparent hover:text-gray-700 dark:hover:text-gray-500 hover:bg-black/[0.02] dark:hover:bg-white/[0.02]"
+                      // Inactive base — Dark: gray-400 → 6.8:1 ✓  (was dark:gray-600 → 2.3:1 ❌)
+                      // Inactive hover — Dark: gray-300 → 11.7:1 ✓  (was dark:hover:gray-500 → 3.6:1 ❌)
+                      : "text-gray-500 dark:text-gray-400 border-transparent hover:text-gray-700 dark:hover:text-gray-300 hover:bg-black/[0.02] dark:hover:bg-white/[0.02]"
                   }`}
                 >
                   {tab.label}
@@ -577,11 +568,10 @@ export function CalendarCard({
           </div>
         )}
 
-        {/* Timeline — always present, rows fill content in-place */}
+        {/* Timeline */}
         <div className="px-2 sm:px-2.5 pb-1.5">
           {timelineStarted
-            ? // Real rows — with section labels and per-row loading
-              sections.map((section) => (
+            ? sections.map((section) => (
                 <div key={section.label || "default"}>
                   {section.label && <SectionLabel label={section.label} />}
                   {section.events.map((evt) => {
@@ -602,8 +592,7 @@ export function CalendarCard({
                   })}
                 </div>
               ))
-            : // Skeleton rows — stable layout, visible immediately
-              Array.from({ length: SKELETON_ROW_COUNT }, (_, i) => (
+            : Array.from({ length: SKELETON_ROW_COUNT }, (_, i) => (
                 <TimelineRow
                   key={i}
                   event={SKELETON_EVENT}
@@ -627,22 +616,22 @@ export function CalendarCard({
                     content: buildOpenCalendarPrompt(calendarYear),
                   } as Message)
                 }
-                // Yellow bg (#FFC328) with dark text (#002E5D) → contrast fine (bg is decorative, text is dark)
+                // Yellow bg (#FFC328) + dark text (#002E5D) — bg is decorative, text contrast is fine
                 className="inline-flex items-center gap-1.5 text-[11.5px] sm:text-[12.5px] font-semibold text-[#002E5D] dark:text-[#002E5D] bg-[hsl(var(--header-bg))] hover:bg-amber-300 dark:hover:bg-amber-300 px-3 sm:px-4 py-1.5 rounded-lg transition-all hover:-translate-y-px hover:shadow-[0_4px_12px_rgba(255,195,40,0.25)]"
               >
                 <Calendar className="w-3.5 h-3.5" />
                 {calendarYear ? `Open ${calendarYear} Calendar` : "Open Calendar"}
               </button>
             </div>
-            {/* gray-600 → 6.0:1 ✓  (was gray-400 → 2.6:1) */}
-            <div className="text-[10px] sm:text-[10.5px] text-gray-600 dark:text-gray-600">
+            {/* Light: gray-600 → 6.0:1 ✓ | Dark: gray-400 → 6.8:1 ✓  (was dark:gray-600 → 2.3:1 ❌) */}
+            <div className="text-[10px] sm:text-[10.5px] text-gray-600 dark:text-gray-400">
               Source:{" "}
               <a
                 href={cardData.sourceUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                // amber-700 hover → 6.1:1 ✓  (was yellow hsl(--header-bg) → ~1.5:1)
-                className="underline underline-offset-2 decoration-gray-400 dark:decoration-gray-700 hover:text-amber-700 dark:hover:text-amber-300 transition-colors"
+                // Hover — Light: amber-700 → 6.1:1 ✓ | Dark: amber-300 → 12.0:1 ✓
+                className="underline underline-offset-2 decoration-gray-400 dark:decoration-gray-600 hover:text-amber-700 dark:hover:text-amber-300 transition-colors"
               >
                 Academic Calendar
               </a>
@@ -653,8 +642,8 @@ export function CalendarCard({
         {/* Footnote */}
         {showFooter && cardData.footnote && (
           <div className="px-3 sm:px-4 pb-3 -mt-1">
-            {/* gray-600 → 6.0:1 ✓  (was gray-400/500) */}
-            <p className="text-[11px] sm:text-[11.5px] text-gray-600 dark:text-gray-500 leading-relaxed">
+            {/* Light: gray-600 → 6.0:1 ✓ | Dark: gray-400 → 6.8:1 ✓  (was dark:gray-500 → 3.6:1 ❌) */}
+            <p className="text-[11px] sm:text-[11.5px] text-gray-600 dark:text-gray-400 leading-relaxed">
               <strong className="font-semibold">Note:</strong>{" "}
               {cardData.footnote}
             </p>
@@ -673,9 +662,9 @@ export function CalendarCard({
                 onClick={() =>
                   append?.({ role: "user", content: q } as Message)
                 }
-                // gray-600 base → 6.0:1 ✓; amber-700 hover → 6.1:1 ✓
-                // (was gray-500 base → 3.7:1, yellow hover → ~1.5:1)
-                className={`text-[11px] sm:text-[11.5px] font-medium text-gray-600 dark:text-gray-500 px-2.5 sm:px-3 py-1.5 rounded-md bg-[#f5f4f0] dark:bg-[#161b22] border border-gray-200/60 dark:border-white/[0.06] cursor-pointer transition-all hover:text-amber-700 dark:hover:text-amber-300 hover:border-amber-700/20 dark:hover:border-amber-400/15 hover:bg-amber-700/5 dark:hover:bg-amber-400/5 text-left ${i === 1 ? "hidden sm:inline-block" : "inline-block"}`}
+                // Base  — Light: gray-600 → 6.0:1 ✓ | Dark: gray-400 → 6.8:1 ✓  (was dark:gray-500 → 3.6:1 ❌)
+                // Hover — Light: amber-700 → 6.1:1 ✓ | Dark: amber-300 → 12.0:1 ✓
+                className={`text-[11px] sm:text-[11.5px] font-medium text-gray-600 dark:text-gray-400 px-2.5 sm:px-3 py-1.5 rounded-md bg-[#f5f4f0] dark:bg-[#161b22] border border-gray-200/60 dark:border-white/[0.06] cursor-pointer transition-all hover:text-amber-700 dark:hover:text-amber-300 hover:border-amber-700/20 dark:hover:border-amber-400/15 hover:bg-amber-700/5 dark:hover:bg-amber-400/5 text-left ${i === 1 ? "hidden sm:inline-block" : "inline-block"}`}
               >
                 {q}
               </button>
@@ -692,9 +681,9 @@ export function CalendarCard({
               content: "Yes, list the dates in text format",
             } as Message)
           }
-          // gray-600 base → 6.0:1 ✓; amber-700 hover → 6.1:1 ✓
-          // (was gray-400 base → 2.6:1, yellow hover → ~1.5:1)
-          className="self-start text-[11px] sm:text-[11.5px] text-gray-600 dark:text-gray-500 hover:text-amber-700 dark:hover:text-amber-300 transition-colors cursor-pointer text-left"
+          // Base  — Light: gray-600 → 6.0:1 ✓ | Dark: gray-400 → 6.8:1 ✓  (was dark:gray-500 → 3.6:1 ❌)
+          // Hover — Light: amber-700 → 6.1:1 ✓ | Dark: amber-300 → 12.0:1 ✓
+          className="self-start text-[11px] sm:text-[11.5px] text-gray-600 dark:text-gray-400 hover:text-amber-700 dark:hover:text-amber-300 transition-colors cursor-pointer text-left"
         >
           {cardData.textFormatOffer}
         </button>
