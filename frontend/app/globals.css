@@ -132,10 +132,6 @@
     font-feature-settings:
       "rlig" 1,
       "calt" 1;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    font-synthesis-weight: none;
-    font-synthesis-style: none;
   }
 
   .background-gradient {
