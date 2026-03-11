@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -7,6 +8,7 @@ from typing import Any, Optional
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core.settings import Settings
 
+from app.tools.calendar.cache import calendar_cache
 from app.tools.calendar.schema import CalendarToolArgs
 from app.tools.calendar.tool import (
     _get_today,
@@ -492,48 +494,60 @@ def _card_explanation_prompt(today: date) -> str:
     next_season_map = {1: "winter", 2: "winter", 3: "spring", 4: "spring", 5: "fall", 6: "fall"}
     next_season = next_season_map[next_block]
 
+    # Build pre-computed block status so the LLM doesn't do date math
+    block_info = {
+        1: ("Winter", "Jan–Feb"), 2: ("Winter", "Mar–Apr"),
+        3: ("Spring", "May–Jun"), 4: ("Spring", "Jul–Aug"),
+        5: ("Fall", "Sep–Oct"),   6: ("Fall", "Nov–Dec"),
+    }
+    status_lines = []
+    for b in range(1, 7):
+        s, m = block_info[b]
+        if b < block:
+            status_lines.append(f"  Block {b} ({s}, {m}): PAST")
+        elif b == block:
+            status_lines.append(f"  Block {b} ({s}, {m}): CURRENT — in progress")
+        else:
+            status_lines.append(f"  Block {b} ({s}, {m}): FUTURE")
+    block_status = "\n".join(status_lines)
+
     return (
         "You are a BYU-Pathway missionary support assistant. The user is a "
         "SERVICE MISSIONARY who advises students — not a student themselves. "
         "A calendar card was just displayed showing academic dates. Write 1-2 "
         "brief, helpful sentences that directly answer their question based on "
-        "the card data and source documents below.\n\n"
+        "the card data below.\n\n"
         "AUDIENCE: Always refer to students in the third person (e.g. "
         "'students must pay by this date', 'students will be assessed a late fee'). "
         "NEVER use 'you' to mean the student — the missionary is the one reading.\n\n"
-        f"CURRENT DATE CONTEXT: Today is {today.strftime('%B %d, %Y')}. "
-        f"The current academic block is {season.capitalize()} {today.year}, "
-        f"Block {block}. BYU-Pathway has exactly 3 semesters per year (NO 'Summer'): "
-        f"Winter (Blocks 1-2, Jan-Apr), Spring (Blocks 3-4, May-Aug), "
-        f"Fall (Blocks 5-6, Sep-Dec). "
-        f"Season order: Winter → Spring → Fall → Winter (next year). "
-        f"The NEXT block is {next_season.capitalize()} {next_year} Block {next_block}. "
-        f"NEVER skip blocks — after Block {block} comes Block {next_block}, "
-        f"not some later block.\n\n"
+        f"TODAY: {today.strftime('%B %d, %Y')}. "
+        f"Current block: {season.capitalize()} {today.year} Block {block}. "
+        f"Next block: {next_season.capitalize()} {next_year} Block {next_block}.\n\n"
+        f"BLOCK STATUS (use this — do NOT do your own date math):\n{block_status}\n\n"
+        "BLOCK-TO-MONTH MAPPING (use this to verify dates):\n"
+        "  Block 1 = Winter Jan–Feb, Block 2 = Winter Mar–Apr\n"
+        "  Block 3 = Spring May–Jun, Block 4 = Spring Jul–Aug\n"
+        "  Block 5 = Fall Sep–Oct, Block 6 = Fall Nov–Dec\n"
+        "  If a date is in April, it belongs to Block 2 (NOT Block 3).\n"
+        "  If a date is in September, it belongs to Block 5 (NOT Block 3).\n\n"
         "Rules:\n"
-        "- Use the source_documents field (original academic calendar text) as your "
-        "primary source of truth. The card data summarizes it, but the source has full details.\n"
-        "- If a key deadline has already passed, mention THE VERY NEXT one in "
-        "chronological order — NOT a later block. For example, if Block 2 registration "
-        "has closed, the next registration is for Block 3, NOT Block 5 or 6.\n"
+        "- Use the blocks_shown and key_events fields as your data source. "
+        "Each event has its date and status (past/upcoming).\n"
+        "- If a key deadline has already passed (status=past), mention THE VERY NEXT one in "
+        "chronological order — NOT a later block.\n"
         "- Do NOT repeat the full list of dates — just answer the question conversationally.\n"
         "- Do NOT start with 'Based on the card' or similar meta-references.\n"
         "- NEVER say you 'can\'t provide' or 'don\'t have' information that the card "
         "already shows. The card IS your answer — summarize what it shows.\n"
-        "- Use **bold** markdown to emphasize key facts (e.g. fee amounts, "
-        "important consequences, critical dates).\n\n"
+        "- Use **bold** markdown to emphasize key facts.\n\n"
         "REGISTRATION STATUS CHECK (apply when the question is about registration):\n"
         "- Registration is OPEN between the 'Registration Opens' date and the "
         "'Add Course Deadline' (Day 1 of the block/semester).\n"
         "- Registration is CLOSED after the Add Course Deadline has passed.\n"
-        f"- Compare these dates to today ({today.strftime('%B %d, %Y')}). "
-        "If the Add Course Deadline is before today, say registration is CLOSED "
-        "and mention when the NEXT registration window opens.\n"
-        "- If the 'Registration Opens' date is in the future, say registration "
-        "has NOT opened yet and state when it will open.\n"
+        f"- If the Add Course Deadline is before today ({today.strftime('%B %d, %Y')}), "
+        "say registration is CLOSED and mention when the NEXT block's registration opens.\n"
         "- 'Priority Registration Deadline' and 'Registration Opens' are "
-        "different labels for the same concept — the date registration opens. "
-        "The label varies by year.\n"
+        "different labels for the same concept.\n"
         "- NEVER give false hope: if registration has closed, do NOT say students "
         "'can register' or 'registration is available'."
     )
@@ -549,7 +563,7 @@ async def _generate_card_explanation(
     events = card.get("events") or []
     event_summaries = [
         f"{evt.get('name')}: {evt.get('date')} ({evt.get('status', '')})"
-        for evt in events[:6]
+        for evt in events
         if isinstance(evt, dict)
     ]
     payload_dict: dict[str, Any] = {
@@ -570,8 +584,12 @@ async def _generate_card_explanation(
         for tab in tabs:
             label = tab.get("label", "")
             tab_events = tab.get("events") or []
-            tab_event_names = [e.get("name", "") for e in tab_events[:4] if isinstance(e, dict)]
-            tab_summaries.append(f"{label}: {len(tab_events)} events ({', '.join(tab_event_names)})")
+            # Include ALL events per tab with dates so the LLM has full context
+            tab_event_details = [
+                f"{e.get('name')}: {e.get('date')} ({e.get('status', '')})"
+                for e in tab_events if isinstance(e, dict)
+            ]
+            tab_summaries.append(f"{label}: {', '.join(tab_event_details)}")
         payload_dict["blocks_shown"] = tab_summaries
     if source_context:
         payload_dict["source_documents"] = source_context[:2000]
@@ -709,6 +727,33 @@ async def run_calendar_pipeline(
         return None, metadata
 
     try:
+        # Phase 3: check cache before doing any work
+        cached = calendar_cache.get(calendar_args)
+        if cached is not None:
+            card, cached_meta = cached
+            card = dict(card)  # shallow copy so we don't mutate the cached entry
+            cached_meta = dict(cached_meta)
+            cached_meta["cache_hit"] = True
+
+            # Regenerate post-card text for this user's specific question
+            secondary_plan = await build_secondary_calendar_text(
+                calendar_args, card, user_query=user_query,
+            )
+            card["secondaryTextMode"] = secondary_plan.get("mode")
+            card["secondaryTextConfidence"] = secondary_plan.get("confidence")
+            secondary_text = str(secondary_plan.get("text") or "").strip()
+            if secondary_text:
+                secondary_text = await localize_calendar_intro(
+                    secondary_text,
+                    user_language=user_language,
+                    original_user_message=user_query or "",
+                )
+                card["postCardText"] = secondary_text
+            else:
+                card.pop("postCardText", None)
+
+            return card, cached_meta
+
         if shared_index is None:
             logger.warning("Calendar pipeline: shared_index is None, skipping")
             metadata["pipeline_status"] = "skipped_no_index"
@@ -729,36 +774,38 @@ async def run_calendar_pipeline(
             and calendar_args.query_type.value == "semester"
             and calendar_args.year
         ):
-            expanded_nodes: list[Any] = []
-            for season in ("winter", "spring", "fall"):
-                expanded_query = (
-                    f"academic calendar {calendar_args.year} {season} "
-                    f"start end dates deadlines block"
-                )
-                try:
-                    season_nodes = await retriever.aretrieve(expanded_query)
-                    expanded_nodes = _merge_nodes(expanded_nodes, season_nodes, max_nodes=24)
-                except Exception as e:
-                    logger.warning(
-                        "Calendar pipeline: season expansion query failed (%s): %s",
-                        season,
-                        e,
-                    )
+            # Phase 1: fire all 9 expansion queries in parallel
+            season_queries = [
+                f"academic calendar {calendar_args.year} {season} "
+                f"start end dates deadlines block"
+                for season in ("winter", "spring", "fall")
+            ]
+            block_queries = [
+                f"academic calendar {calendar_args.year} block {block} "
+                f"start end dates deadlines"
+                for block in range(1, 7)
+            ]
+            all_queries = season_queries + block_queries
 
-            for block in range(1, 7):
-                block_query = (
-                    f"academic calendar {calendar_args.year} block {block} "
-                    f"start end dates deadlines"
-                )
-                try:
-                    block_nodes = await retriever.aretrieve(block_query)
-                    expanded_nodes = _merge_nodes(expanded_nodes, block_nodes, max_nodes=30)
-                except Exception as e:
+            logger.info(
+                "Calendar pipeline: firing %d expansion queries in parallel",
+                len(all_queries),
+            )
+            results = await asyncio.gather(
+                *(retriever.aretrieve(q) for q in all_queries),
+                return_exceptions=True,
+            )
+
+            expanded_nodes: list[Any] = []
+            for idx, result in enumerate(results):
+                if isinstance(result, BaseException):
                     logger.warning(
-                        "Calendar pipeline: block expansion query failed (block %s): %s",
-                        block,
-                        e,
+                        "Calendar pipeline: expansion query %d failed: %s",
+                        idx,
+                        result,
                     )
+                    continue
+                expanded_nodes = _merge_nodes(expanded_nodes, result, max_nodes=30)
 
             if expanded_nodes:
                 nodes = _merge_nodes(nodes, expanded_nodes, max_nodes=30)
@@ -949,6 +996,13 @@ async def run_calendar_pipeline(
             }
         )
         logger.info("Calendar pipeline: card built & verified successfully")
+
+        # Phase 3: cache the card without post-card text (it's
+        # conversation-specific and regenerated on cache hits).
+        card_to_cache = {k: v for k, v in card.items() if k != "postCardText"}
+        meta_to_cache = {k: v for k, v in metadata.items() if k != "secondary_text"}
+        calendar_cache.put(calendar_args, card_to_cache, meta_to_cache)
+
         return card, metadata
 
     except Exception as e:

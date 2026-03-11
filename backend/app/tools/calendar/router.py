@@ -273,6 +273,48 @@ def _apply_relative_time_overrides(
 		args_dict["block_number"] = target_block
 
 
+def _apply_next_block_default(
+	args_dict: dict,
+	message: str,
+	user_timezone: str,
+) -> None:
+	"""When the user didn't mention a specific season/block/year, ensure we
+	default to the NEXT block — i.e. the nearest future block whose
+	registration hasn't opened yet, or the current block if in progress.
+
+	This prevents the LLM from jumping to a far-future season (e.g. Fall)
+	when the user just asks 'when is registration'.
+	"""
+	explicit_season, explicit_year, explicit_block = _extract_block_context(message)
+	# If the user explicitly said a season, year, or block, respect it.
+	if explicit_season or explicit_year or explicit_block:
+		return
+	# If scope is full_year, don't override — they want everything.
+	scope = (args_dict.get("scope") or "term").lower()
+	if scope == "full_year":
+		return
+
+	try:
+		today = datetime.now(ZoneInfo(user_timezone)).date()
+	except Exception:
+		today = datetime.now(ZoneInfo("UTC")).date()
+
+	_, cur_block = _season_block_for_month(today.month)
+	next_block = cur_block + 1 if cur_block < 6 else 1
+	next_year = today.year if cur_block < 6 else today.year + 1
+	next_season_map = {1: "winter", 2: "winter", 3: "spring", 4: "spring", 5: "fall", 6: "fall"}
+	next_season = next_season_map[next_block]
+
+	# Override season/block/year to the next block
+	args_dict["season"] = next_season
+	args_dict["block_number"] = next_block
+	args_dict["year"] = next_year
+	logger.info(
+		"Next-block default applied: season=%s, block=%d, year=%d",
+		next_season, next_block, next_year,
+	)
+
+
 async def detect_calendar_intent_via_llm(
 	message: str,
 	user_timezone: str = "UTC",
@@ -382,6 +424,10 @@ async def detect_calendar_intent_via_llm(
 
 			# Deterministic override: resolve relative time expressions
 			_apply_relative_time_overrides(args_dict, message, user_timezone)
+
+			# Deterministic override: if the user didn't specify a season/block
+			# explicitly, force the NEXT block so the nearest future dates appear.
+			_apply_next_block_default(args_dict, message, user_timezone)
 
 			args_dict.setdefault("timezone", user_timezone)
 			args_dict.setdefault("scope", "term")

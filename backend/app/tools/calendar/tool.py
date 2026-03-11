@@ -11,12 +11,12 @@ Flow:
 
 import json
 import logging
+import os
 import re
 from datetime import date, datetime
 from typing import Optional
 
-from llama_index.core.llms import ChatMessage, MessageRole
-from llama_index.core.settings import Settings
+from openai import AsyncOpenAI
 from zoneinfo import ZoneInfo
 
 from app.tools.calendar.schema import (
@@ -29,6 +29,13 @@ from app.tools.calendar.vocabulary import event_matches_deadline
 logger = logging.getLogger("uvicorn")
 
 from app.tools.calendar.config import ACADEMIC_CALENDAR_URL
+
+
+def _get_openai_client() -> AsyncOpenAI:
+	"""Lazy singleton for direct OpenAI calls (JSON mode)."""
+	if not hasattr(_get_openai_client, "_client"):
+		_get_openai_client._client = AsyncOpenAI()
+	return _get_openai_client._client
 
 ACADEMIC_CALENDAR_SOURCE_URL = ACADEMIC_CALENDAR_URL
 
@@ -268,15 +275,14 @@ async def query_pinecone_for_calendar(args: CalendarToolArgs, retriever) -> list
 
 
 _MAX_CONTEXT_CHARS = 4000
-_MAX_CONTEXT_CHARS_FULL_YEAR = 14000
+_MAX_CONTEXT_CHARS_FULL_YEAR = 15000
 _MAX_CONTEXT_NODES_FULL_YEAR = 16
 _MAX_EXTRACTION_ATTEMPTS = 2
 _MAX_EXTRACTION_ATTEMPTS_FULL_YEAR = 1
 
 _EXTRACTION_SYSTEM = (
 	"You extract structured academic calendar data from documents. "
-	"Respond with ONLY a JSON object (no markdown fences, no explanation). "
-	"Use this exact schema:\n"
+	"Return a JSON object matching this schema:\n"
 	"{\n"
 	'  "title": "string, e.g. Winter 2026 — Block 2",\n'
 	'  "subtitle": "string, date range e.g. March 2 – April 18, 2026",\n'
@@ -288,31 +294,41 @@ _EXTRACTION_SYSTEM = (
 	'  "blocks": null or [{"block_label": "Block 3", "events": [...same event shape...]}]\n'
 	"}\n"
 	"Rules:\n"
-	"- WARNING: DO NOT INVENT, SHIFT, OR EXTRAPOLATE YEARS OR DATES. USE ONLY DATES EXPLICITLY PRESENT IN DOCUMENTS.\n"
-	"- Include events matching the query AND closely related events that give "
-	"the student a complete picture. For example, if the query is about "
-	"'registration', include Registration Opens, Add/Drop Deadline, "
-	"and any other dates that define the registration window. "
-	"If the query is about a block or semester, include Start, End, "
-	"and all key deadlines for that period.\n"
-	"- If scope is full_year, include all relevant events across Winter, Spring, and Fall for that year, grouped by block where possible.\n"
-	"- Dates MUST be ISO format YYYY-MM-DD. Omit events with ambiguous dates.\n"
+	"- DO NOT INVENT OR EXTRAPOLATE DATES. Use only dates explicitly in the documents.\n"
+	"- Each block has up to 13 event types. Extract ALL of them when present:\n"
+	"  Start, Financial Holds Applied, Registration Opens, Application Deadline, "
+	"Add Course Deadline, Tuition Discount Deadline, Drop/Auto-Drop Deadline, "
+	"Last Day for a Refund, Payment Deadline, Late Fees Applied, "
+	"Last Day to Withdraw with a W Grade, Grades Available, End.\n"
+	"- For block/semester queries, include ALL events for the block — not just a subset.\n"
+	"- For deadline queries, include the specific deadline + all related events for context.\n"
+	"- If scope is full_year, include all events across Winter, Spring, and Fall, grouped by block.\n"
+	"- Dates MUST be ISO YYYY-MM-DD. Omit events with ambiguous dates.\n"
 	"- For semester queries, group events by block in the 'blocks' field.\n"
-	"- CRITICAL: Each block must only contain dates that belong to THAT block. "
-	"Do NOT put semester-level dates or other block dates under the wrong block. "
-	"For example, Block 5 end date is NOT the same as the semester end date — "
-	"use the specific block end date from the source documents.\n"
-	"- CRITICAL: A full academic year ALWAYS has exactly 6 blocks: "
-	"Block 1 & 2 (Winter), Block 3 & 4 (Spring), Block 5 & 6 (Fall). "
-	"A single semester (Winter, Spring, or Fall) ALWAYS has exactly 2 blocks. "
-	"You MUST include ALL blocks — never skip any.\n"
-	"- CRITICAL: block_label MUST use the CANONICAL block number: "
-	"Winter = Block 1, Block 2. Spring = Block 3, Block 4. Fall = Block 5, Block 6. "
-	"Do NOT number blocks starting from 1 within each semester. "
-	"The first Spring block is ALWAYS 'Block 3', NEVER 'Block 1'.\n"	"- For single-block queries, leave 'blocks' as null.\n"
-	"- IMPORTANT: Every event MUST have a short 'description' (1 sentence, max 15 words). "
-	"Explain what it means for the student.\n"
+	"- Each block must only contain dates belonging to THAT block. "
+	"A full year has exactly 6 blocks: Block 1-2 (Winter), Block 3-4 (Spring), Block 5-6 (Fall). "
+	"A semester has exactly 2 blocks. Include ALL blocks — never skip any. "
+	"block_label MUST use CANONICAL numbers (Spring Block 3, not Block 1).\n"
+	"- For single-block queries, leave 'blocks' as null.\n"
+	"- Every event MUST have a short 'description' (1 sentence, max 15 words).\n"
 )
+
+
+def _deduplicate_node_content(nodes: list) -> list:
+	"""Remove nodes whose text content is a duplicate of an earlier node."""
+	seen_texts: set[str] = set()
+	unique: list = []
+	for node in nodes:
+		text = (getattr(node, "text", "") or "").strip()
+		if not text:
+			continue
+		# Use first 200 chars as fingerprint to catch near-duplicates
+		fingerprint = text[:200]
+		if fingerprint in seen_texts:
+			continue
+		seen_texts.add(fingerprint)
+		unique.append(node)
+	return unique
 
 
 async def extract_structured_data(
@@ -321,6 +337,9 @@ async def extract_structured_data(
 ) -> Optional[ExtractedCalendarData]:
 	if not nodes:
 		return None
+
+	# Phase 4: deduplicate before building context
+	nodes = _deduplicate_node_content(nodes)
 
 	scope = (getattr(args, "scope", "term") or "term").lower()
 	resolved_season = args.season or _season_for_block(args.block_number)
@@ -358,20 +377,22 @@ async def extract_structured_data(
 	user_content = f"Extract calendar data for: {query_desc}\n\nDocuments:\n{context}"
 	last_error: Optional[str] = None
 
+	model = os.environ.get("MODEL", "gpt-4o-mini")
+	client = _get_openai_client()
+
 	for attempt in range(1, max_attempts + 1):
 		try:
-			logger.info(f"Extraction attempt {attempt}/{max_attempts}")
-			response = await Settings.llm.achat(
+			logger.info(f"Extraction attempt {attempt}/{max_attempts} (JSON mode)")
+			response = await client.chat.completions.create(
+				model=model,
+				temperature=0,
+				response_format={"type": "json_object"},
 				messages=[
-					ChatMessage(role=MessageRole.SYSTEM, content=_EXTRACTION_SYSTEM),
-					ChatMessage(role=MessageRole.USER, content=user_content),
+					{"role": "system", "content": _EXTRACTION_SYSTEM},
+					{"role": "user", "content": user_content},
 				],
 			)
-			raw = response.message.content.strip()
-			if raw.startswith("```"):
-				raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-				if raw.endswith("```"):
-					raw = raw[:-3].strip()
+			raw = (response.choices[0].message.content or "").strip()
 
 			data = json.loads(raw)
 			for key in {"title", "subtitle", "events", "source_url"}:
@@ -579,7 +600,7 @@ def build_calendar_card(
 		normalized_title = f"{args.year} Academic Calendar"
 		# Compute full-year subtitle from all tab events
 		all_dates: list[date] = []
-		for tab in tabs:
+		for tab in (tabs or []):
 			for evt in tab.get("events", []):
 				try:
 					all_dates.append(date.fromisoformat(evt["date"]))

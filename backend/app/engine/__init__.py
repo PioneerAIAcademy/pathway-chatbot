@@ -9,6 +9,50 @@ from llama_index.core.memory import ChatMemoryBuffer
 
 from app.engine.custom_condense_plus_context import CustomCondensePlusContextChatEngine
 
+
+def _precomputed_temporal_status(now: datetime) -> str:
+    """Build a pre-computed temporal status block so the LLM doesn't need to
+    do date math. Returns a concise block listing which blocks are PAST,
+    CURRENT, and FUTURE for the current academic year."""
+    month, year = now.month, now.year
+
+    _BLOCK_INFO = {
+        1: ("Winter", "Jan–Feb"), 2: ("Winter", "Mar–Apr"),
+        3: ("Spring", "May–Jun"), 4: ("Spring", "Jul–Aug"),
+        5: ("Fall", "Sep–Oct"),   6: ("Fall", "Nov–Dec"),
+    }
+
+    # Determine current block from month
+    if month <= 2:   cur_block = 1
+    elif month <= 4: cur_block = 2
+    elif month <= 6: cur_block = 3
+    elif month <= 8: cur_block = 4
+    elif month <= 10: cur_block = 5
+    else:            cur_block = 6
+
+    cur_season, cur_months = _BLOCK_INFO[cur_block]
+    next_block = cur_block + 1 if cur_block < 6 else 1
+    next_year = year if cur_block < 6 else year + 1
+    next_season, _ = _BLOCK_INFO[next_block]
+
+    lines = [
+        "PRE-COMPUTED BLOCK STATUS (authoritative — use this, do NOT do your own date math):",
+    ]
+    for b in range(1, 7):
+        season, months = _BLOCK_INFO[b]
+        if b < cur_block:
+            lines.append(f"  Block {b} ({season} {year}, {months}): *** PAST *** — all deadlines already passed")
+        elif b == cur_block:
+            lines.append(f"  Block {b} ({season} {year}, {months}): *** CURRENT *** — in progress right now")
+        else:
+            lines.append(f"  Block {b} ({season} {year}, {months}): FUTURE")
+    lines.append(f"  → The NEXT block is Block {next_block} ({next_season} {next_year}).")
+    lines.append(f"  → Any dates/deadlines for PAST blocks have ALREADY PASSED — never present them as upcoming.")
+    lines.append(f"  → 'Next registration' = the registration window for Block {next_block}, NOT a past block.")
+
+    return "\n".join(lines)
+
+
 def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatEngine:
     node_postprocessors = []
     
@@ -34,16 +78,20 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
         filters=filters,
     )
     
-    current_date = datetime.now(ZoneInfo("UTC")).strftime("%B %d, %Y")
+    now = datetime.now(ZoneInfo("UTC"))
+    current_date = now.strftime("%B %d, %Y")
+    temporal_status = _precomputed_temporal_status(now)
 
     SYSTEM_CITATION_PROMPT = f"""
     IMPORTANT - Today's date is {current_date}. Use this information when answering questions about dates, deadlines, terms, blocks, semesters, and the academic calendar. If the user asks what today's date is, tell them directly.
 
+    {temporal_status}
+
     TEMPORAL REASONING RULES (apply these BEFORE writing your answer):
-    1. Compare every date you mention to today ({current_date}). If a date is before today, it is IN THE PAST. If it equals today, it is TODAY. If it is after today, it is IN THE FUTURE.
-    2. When the user asks about "next" term/block/deadline, they mean the NEAREST ONE THAT HAS NOT STARTED YET (start date > today). If a term already started, it is the CURRENT term, not the "next" one.
-    3. When a term's start date is before today and its end date is after today, that term is CURRENTLY IN PROGRESS — say so explicitly (e.g., "Term 2 is currently underway — it started on March 2").
-    4. When a deadline date is before today, it HAS ALREADY PASSED — say so clearly (e.g., "The registration deadline was January 28 and has already passed").
+    1. Use the PRE-COMPUTED BLOCK STATUS above as your source of truth for what is past, current, and future. Do NOT override it.
+    2. If a date belongs to a block marked *** PAST ***, that date HAS ALREADY PASSED — never present it as upcoming.
+    3. When the user asks about "next" term/block/deadline, the answer is the NEXT block listed in the status above, NOT a past one.
+    4. When a block is marked *** CURRENT ***, it is IN PROGRESS — say so explicitly.
     5. NEVER present a past date as upcoming, and never present an in-progress term as "next."
 
     When the user asks about calendar dates, provide a brief human-friendly intro before detailed information, but NEVER claim "today" status (e.g., "today", "Day 1", "starts today") unless it is explicitly verified from the retrieved dates relative to today's date.
@@ -131,10 +179,11 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
     """
 
     CONTEXT_PROMPT = """
-    Today's date is """ + current_date + """. BEFORE answering, compare every date to today:
-    - If a start date is before today and the end date is after today, the term/block is CURRENTLY IN PROGRESS (not "next").
-    - If a date is before today, it is in the PAST — say so.
-    - "Next" means the nearest event whose start date is AFTER today.
+    Today's date is """ + current_date + """.
+
+    """ + temporal_status + """
+
+    IMPORTANT: Use the block status above to decide what is past/current/future. Any date belonging to a PAST block has already passed — do NOT present it as upcoming. The "next" registration or deadline is for the NEXT block listed above.
 
     Answer the question as truthfully as possible using the numbered contexts below. If the answer isn't in the text, please say "Sorry, I'm not able to answer this question. Could you rephrase it?" Please provide a detailed answer. For each sentence in your answer, include a link to the contexts the sentence came from using the format [^context number].
 

@@ -43,3 +43,13 @@ ACADEMIC_CALENDAR_URL = (
 # tokens have been streamed before emitting calendar card patches.  This
 # ensures the student sees some context-setting text before the card.
 MIN_TOKENS_BEFORE_CALENDAR: int = 15
+
+
+# ── Calendar Cache ───────────────────────────────────────────────────────
+
+# Time-to-live for cached calendar results (seconds).  Academic calendar
+# data rarely changes mid-day, so 1 hour keeps things fresh enough.
+CALENDAR_CACHE_TTL: float = 3600.0
+
+# Maximum number of distinct query keys held in the cache at once.
+CALENDAR_CACHE_MAX_SIZE: int = 64

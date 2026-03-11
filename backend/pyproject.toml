@@ -64,6 +64,9 @@ version = "0.0.15"
 jupyterlab = "^4.2.5"
 pytest = "^8.4.2"
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
 [build-system]
 requires = [ "poetry-core" ]
 build-backend = "poetry.core.masonry.api"
