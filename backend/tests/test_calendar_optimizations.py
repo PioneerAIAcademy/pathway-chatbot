@@ -30,7 +30,9 @@ from app.tools.calendar.tool import (
     _deduplicate_node_content,
     _MAX_CONTEXT_CHARS,
     _MAX_CONTEXT_CHARS_FULL_YEAR,
+    _MAX_EVENTS_PER_TAB,
     _EXTRACTION_SYSTEM,
+    _strict_block_from_date,
     build_calendar_card,
     extract_structured_data,
 )
@@ -378,8 +380,8 @@ class TestJSONModeExtraction:
         assert mock_client.chat.completions.create.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_extract_full_year_no_retry(self):
-        """For full_year queries (max_attempts=1), should NOT retry."""
+    async def test_extract_full_year_retries(self):
+        """For full_year queries (max_attempts=2), should retry once."""
         empty_response = MagicMock()
         empty_response.choices = [MagicMock()]
         empty_response.choices[0].message.content = json.dumps({
@@ -396,8 +398,8 @@ class TestJSONModeExtraction:
         with patch("app.tools.calendar.tool._get_openai_client", return_value=mock_client):
             result = await extract_structured_data(nodes, args)
 
-        assert result is None  # gave up after 1 attempt
-        assert mock_client.chat.completions.create.call_count == 1
+        assert result is None  # gave up after 2 attempts
+        assert mock_client.chat.completions.create.call_count == 2
 
     @pytest.mark.asyncio
     async def test_extract_empty_nodes_returns_none(self):
@@ -486,7 +488,7 @@ class TestParallelQueries:
             patch("app.tools.calendar.service.query_pinecone_for_calendar", return_value=[
                 FakeNode("initial query result"),
             ]),
-            patch("app.tools.calendar.service.extract_structured_data", return_value=fake_extracted),
+            patch("app.tools.calendar.service.extract_full_year_by_semester", return_value=fake_extracted),
             patch("app.tools.calendar.service.build_calendar_card", return_value=fake_card),
             patch("app.tools.calendar.service.compute_suggestions", return_value=[]),
             patch("app.tools.calendar.service.build_secondary_calendar_text", return_value={
@@ -556,7 +558,7 @@ class TestParallelQueries:
             patch("app.tools.calendar.service.query_pinecone_for_calendar", return_value=[
                 FakeNode("initial"),
             ]),
-            patch("app.tools.calendar.service.extract_structured_data", return_value=fake_extracted),
+            patch("app.tools.calendar.service.extract_full_year_by_semester", return_value=fake_extracted),
             patch("app.tools.calendar.service.build_calendar_card", return_value=fake_card),
             patch("app.tools.calendar.service.compute_suggestions", return_value=[]),
             patch("app.tools.calendar.service.build_secondary_calendar_text", return_value={
@@ -715,3 +717,173 @@ class TestPromptSanity:
         ]
         for event in required_events:
             assert event in _EXTRACTION_SYSTEM, f"Missing event type: {event}"
+
+
+# ── Tab Building (cross-block contamination fix) ─────────────────────
+
+
+def _make_event(d: str, name: str, desc: str = "test") -> ExtractedCalendarEvent:
+    return ExtractedCalendarEvent(date=d, name=name, description=desc)
+
+
+def _make_block(label: str, events: list[ExtractedCalendarEvent]):
+    from app.tools.calendar.schema import ExtractedBlockData
+    return ExtractedBlockData(block_label=label, events=events)
+
+
+def _semester_args(scope: str = "full_year", season: str | None = None) -> CalendarToolArgs:
+    return CalendarToolArgs(
+        query_type=CalendarQueryType.SEMESTER,
+        year=2026,
+        scope=scope,
+        season=season,
+    )
+
+
+class TestTabBuilding:
+    """Verify tab building trusts LLM blocks and handles edge cases."""
+
+    def test_llm_correct_blocks_trusted(self):
+        """When LLM groups events correctly per block, each tab gets its own events."""
+        blocks = [
+            _make_block("Block 1", [_make_event("2026-01-05", "Start")]),
+            _make_block("Block 2", [_make_event("2026-03-02", "Start")]),
+        ]
+        extracted = ExtractedCalendarData(
+            title="Winter 2026",
+            events=[_make_event("2026-01-05", "Start"), _make_event("2026-03-02", "Start")],
+            blocks=blocks,
+        )
+        args = _semester_args(scope="term", season="winter")
+        card = build_calendar_card(extracted, args, date(2026, 3, 10))
+        assert card is not None
+        assert card["tabs"] is not None
+        assert len(card["tabs"]) == 2
+        # Block 1 tab should have only Jan event
+        assert len(card["tabs"][0]["events"]) == 1
+        assert card["tabs"][0]["events"][0]["date"] == "2026-01-05"
+        # Block 2 tab should have only Mar event
+        assert len(card["tabs"][1]["events"]) == 1
+        assert card["tabs"][1]["events"][0]["date"] == "2026-03-02"
+
+    def test_llm_prep_events_before_block_start_kept(self):
+        """Prep events (e.g., registration) that precede a block start should NOT be filtered."""
+        # Block 2 registration opens Jan 28, but Block 2 starts Mar 2
+        blocks = [
+            _make_block("Block 1", [_make_event("2026-01-05", "Start")]),
+            _make_block("Block 2", [
+                _make_event("2026-01-28", "Registration Opens"),
+                _make_event("2026-02-23", "Application Deadline"),
+                _make_event("2026-03-02", "Start"),
+            ]),
+        ]
+        extracted = ExtractedCalendarData(
+            title="Winter 2026",
+            events=blocks[0].events + list(blocks[1].events),
+            blocks=blocks,
+        )
+        args = CalendarToolArgs(
+            query_type=CalendarQueryType.SEMESTER,
+            year=2026,
+            scope="term",
+            season="winter",
+        )
+        card = build_calendar_card(extracted, args, date(2026, 3, 10))
+        assert card is not None
+        # Find the Block 2 tab (may not be at index 0 after sorting)
+        block2_tab = next(t for t in card["tabs"] if "2" in t["label"])
+        tab_events = block2_tab["events"]
+        # All 3 events must be present — old filter would have removed Jan 28
+        assert len(tab_events) == 3, f"Expected 3 events, got {len(tab_events)}: {[e['name'] for e in tab_events]}"
+        dates = [e["date"] for e in tab_events]
+        assert "2026-01-28" in dates, "Registration Opens (Jan 28) should NOT be filtered from Block 2"
+        assert "2026-02-23" in dates
+        assert "2026-03-02" in dates
+
+    def test_overflow_triggers_strict_rebuild(self):
+        """Tabs with >MAX events get rebuilt from flat events using strict assignment."""
+        # Simulate LLM putting 25 events (overflow) in Block 1
+        many_events = [
+            _make_event(f"2026-{m:02d}-05", f"Event {m}")
+            for m in range(1, 13)
+        ] + [
+            _make_event(f"2026-{m:02d}-15", f"Event {m}b")
+            for m in range(1, 13)
+        ] + [_make_event("2026-06-20", "Extra")]
+        blocks = [_make_block("Block 1", many_events)]
+        extracted = ExtractedCalendarData(
+            title="2026 Academic Calendar",
+            events=many_events,
+            blocks=blocks,
+        )
+        args = _semester_args()
+        card = build_calendar_card(extracted, args, date(2026, 3, 10))
+        assert card is not None
+        assert card["tabs"] is not None
+        # After rebuild, should have 6 tabs (full year)
+        assert len(card["tabs"]) == 6
+        labels = [t["label"] for t in card["tabs"]]
+        assert labels == [f"Block {i}" for i in range(1, 7)]
+        # Each tab should have events only from its 2-month window
+        for tab in card["tabs"]:
+            assert len(tab["events"]) <= _MAX_EVENTS_PER_TAB, (
+                f"{tab['label']} has {len(tab['events'])} events after rebuild"
+            )
+
+    def test_empty_tabs_filled_from_flat(self):
+        """Tabs with 0 events get filled from flat events when other tabs have events."""
+        b1_events = [_make_event("2026-01-05", "Start"), _make_event("2026-02-21", "End")]
+        b2_events: list[ExtractedCalendarEvent] = []  # LLM returned empty Block 2
+        blocks = [
+            _make_block("Block 1", b1_events),
+            _make_block("Block 2", b2_events),
+        ]
+        flat = b1_events + [_make_event("2026-03-02", "Start"), _make_event("2026-04-18", "End")]
+        extracted = ExtractedCalendarData(
+            title="Winter 2026",
+            events=flat,
+            blocks=blocks,
+        )
+        args = _semester_args(scope="term", season="winter")
+        card = build_calendar_card(extracted, args, date(2026, 3, 10))
+        assert card is not None
+        # Block 2 tab should have been filled from flat events
+        block2_tab = next(t for t in card["tabs"] if "2" in t["label"])
+        assert len(block2_tab["events"]) >= 1, "Block 2 should be filled from flat events"
+
+    def test_strict_block_from_date(self):
+        """Non-overlapping month assignment: Jan-Feb → 1, Mar-Apr → 2, ..., Nov-Dec → 6."""
+        assert _strict_block_from_date(date(2026, 1, 15), 2026) == 1
+        assert _strict_block_from_date(date(2026, 2, 28), 2026) == 1
+        assert _strict_block_from_date(date(2026, 3, 1), 2026) == 2
+        assert _strict_block_from_date(date(2026, 4, 30), 2026) == 2
+        assert _strict_block_from_date(date(2026, 5, 4), 2026) == 3
+        assert _strict_block_from_date(date(2026, 6, 20), 2026) == 3
+        assert _strict_block_from_date(date(2026, 7, 1), 2026) == 4
+        assert _strict_block_from_date(date(2026, 8, 15), 2026) == 4
+        assert _strict_block_from_date(date(2026, 9, 1), 2026) == 5
+        assert _strict_block_from_date(date(2026, 10, 17), 2026) == 5
+        assert _strict_block_from_date(date(2026, 11, 1), 2026) == 6
+        assert _strict_block_from_date(date(2026, 12, 12), 2026) == 6
+
+    def test_full_year_all_six_tabs(self):
+        """Full-year query produces 6 tabs, one per block."""
+        blocks = []
+        flat = []
+        for b in range(1, 7):
+            m = (b - 1) * 2 + 1  # months 1,3,5,7,9,11
+            evt = _make_event(f"2026-{m:02d}-05", "Start")
+            blocks.append(_make_block(f"Block {b}", [evt]))
+            flat.append(evt)
+        extracted = ExtractedCalendarData(
+            title="2026 Academic Calendar",
+            events=flat,
+            blocks=blocks,
+        )
+        args = _semester_args()
+        card = build_calendar_card(extracted, args, date(2026, 3, 10))
+        assert card is not None
+        assert len(card["tabs"]) == 6
+        for i, tab in enumerate(card["tabs"]):
+            assert f"{i+1}" in tab["label"]
+            assert len(tab["events"]) >= 1

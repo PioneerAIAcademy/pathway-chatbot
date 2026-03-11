@@ -87,11 +87,10 @@ const TIMING = {
   spotlight: 3000,
   timeline: 3600,
   rowBase: 4300,
-  rowInterval: 520,
+  rowInterval: 380,
   footerDelay: 1200,
 } as const;
 
-const TIMER_DURATION = 12000;
 const SKELETON_ROW_COUNT = 4;
 
 // --- Card type icon ---
@@ -422,10 +421,14 @@ export function CalendarCard({
   useEffect(() => {
     if (!dataReady) return;
     const start = Date.now();
+    // Dynamic stop: enough for footer + generous buffer.
+    // With 380ms/row, 20 events → rowBase(4300) + 20*380 + footer(1200) ≈ 13100.
+    // 20s cap comfortably handles up to ~40 events per tab.
+    const stop = 20000;
     const id = setInterval(() => {
       const now = Date.now() - start;
       setElapsed(now);
-      if (now >= TIMER_DURATION) clearInterval(id);
+      if (now >= stop) clearInterval(id);
     }, 50);
     return () => {
       clearInterval(id);
@@ -574,8 +577,8 @@ export function CalendarCard({
         {/* Timeline */}
         <div className="px-2 sm:px-2.5 pb-1.5">
           {timelineStarted
-            ? sections.map((section) => (
-                <div key={section.label || "default"}>
+            ? sections.map((section, sectionIdx) => (
+                <div key={sectionIdx}>
                   {section.label && <SectionLabel label={section.label} />}
                   {section.events.map((evt) => {
                     const globalIndex = displayEvents.findIndex(

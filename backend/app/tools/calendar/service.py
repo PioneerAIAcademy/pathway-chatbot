@@ -15,6 +15,7 @@ from app.tools.calendar.tool import (
     _season_for_block,
     build_calendar_card,
     compute_suggestions,
+    extract_full_year_by_semester,
     extract_structured_data,
     is_block_extraction_misaligned,
     query_pinecone_for_calendar,
@@ -869,7 +870,10 @@ async def run_calendar_pipeline(
                     return None, metadata
 
         logger.info("Calendar pipeline: extracting structured data...")
-        extracted = await extract_structured_data(nodes, calendar_args)
+        if scope == "full_year":
+            extracted = await extract_full_year_by_semester(nodes, calendar_args)
+        else:
+            extracted = await extract_structured_data(nodes, calendar_args)
         if not extracted:
             logger.warning("Calendar pipeline: structured extraction failed")
             metadata["pipeline_status"] = "extraction_failed"
