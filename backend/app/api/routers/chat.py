@@ -318,6 +318,7 @@ async def chat(
                 shared_index,
                 user_query=last_message_content,
                 user_language=user_language,
+                chat_history=messages,
             )
             if pipeline_metadata:
                 calendar_metadata.update(pipeline_metadata)

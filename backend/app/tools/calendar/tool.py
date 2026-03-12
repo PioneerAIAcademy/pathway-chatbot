@@ -1034,6 +1034,17 @@ def build_calendar_card(
 			normalized_subtitle = _format_range(min(all_dates), max(all_dates))
 	elif args.query_type.value == "semester" and args.season:
 		normalized_title = f"{args.season.capitalize()} {args.year}"
+		# Compute subtitle from all tab events to span the full semester range
+		if tabs:
+			all_dates: list[date] = []
+			for tab in tabs:
+				for evt in tab.get("events", []):
+					try:
+						all_dates.append(date.fromisoformat(evt["date"]))
+					except (ValueError, KeyError):
+						pass
+			if all_dates:
+				normalized_subtitle = _format_range(min(all_dates), max(all_dates))
 	elif args.query_type.value == "block" and args.block_number:
 		season = _season_for_block(args.block_number) or args.season
 		if season:
@@ -1084,7 +1095,11 @@ def build_calendar_card(
 
 def _verify_card(card: dict) -> bool:
 	events = card.get("events", [])
-	if not events and not card.get("spotlight"):
+	# For semester/full-year cards, events live inside tabs, not top-level
+	tab_events = sum(
+		len(t.get("events") or []) for t in (card.get("tabs") or [])
+	)
+	if not events and tab_events == 0 and not card.get("spotlight"):
 		logger.warning("Verification: no events and no spotlight")
 		return False
 

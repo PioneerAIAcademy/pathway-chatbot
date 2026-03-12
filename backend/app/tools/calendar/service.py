@@ -486,7 +486,7 @@ async def _classify_secondary_text_mode_llm(
         return None
 
 
-def _card_explanation_prompt(today: date) -> str:
+def _card_explanation_prompt(today: date, queried_year: int | None = None) -> str:
     from app.tools.calendar.router import _season_block_for_month
 
     season, block = _season_block_for_month(today.month)
@@ -495,16 +495,23 @@ def _card_explanation_prompt(today: date) -> str:
     next_season_map = {1: "winter", 2: "winter", 3: "spring", 4: "spring", 5: "fall", 6: "fall"}
     next_season = next_season_map[next_block]
 
-    # Build pre-computed block status so the LLM doesn't do date math
+    # Build pre-computed block status relative to the QUERIED year, not just current block
     block_info = {
         1: ("Winter", "Jan–Feb"), 2: ("Winter", "Mar–Apr"),
         3: ("Spring", "May–Jun"), 4: ("Spring", "Jul–Aug"),
         5: ("Fall", "Sep–Oct"),   6: ("Fall", "Nov–Dec"),
     }
+    qy = queried_year or today.year
+    all_past = qy < today.year
+    all_future = qy > today.year
     status_lines = []
     for b in range(1, 7):
         s, m = block_info[b]
-        if b < block:
+        if all_past:
+            status_lines.append(f"  Block {b} ({s}, {m}): PAST — {qy} has concluded")
+        elif all_future:
+            status_lines.append(f"  Block {b} ({s}, {m}): FUTURE — {qy} has not started")
+        elif b < block:
             status_lines.append(f"  Block {b} ({s}, {m}): PAST")
         elif b == block:
             status_lines.append(f"  Block {b} ({s}, {m}): CURRENT — in progress")
@@ -512,18 +519,47 @@ def _card_explanation_prompt(today: date) -> str:
             status_lines.append(f"  Block {b} ({s}, {m}): FUTURE")
     block_status = "\n".join(status_lines)
 
+    # Year-relative tense context
+    if all_past:
+        tense_context = (
+            f"\nIMPORTANT — TENSE: The card shows dates from {qy}, which has "
+            f"ENTIRELY PASSED. Every date shown is in the past. "
+            "Use PAST TENSE for ALL dates ('started', 'ended', 'was', 'opened', 'closed'). "
+            "NEVER use future tense ('will begin', 'will start', 'will be') for any date "
+            f"in {qy}. Do NOT warn about missing deadlines — they are historical. "
+            "Instead, briefly summarize the key dates that were shown and, if helpful, "
+            f"mention what the CURRENT block is ({season.capitalize()} {today.year} Block {block}).\n"
+        )
+    elif all_future:
+        tense_context = (
+            f"\nIMPORTANT — TENSE: The card shows dates from {qy}, which has "
+            "NOT YET STARTED. Use future tense where appropriate.\n"
+        )
+    else:
+        tense_context = (
+            "\nTENSE: Use PAST TENSE for any date with status=past. "
+            "Use present/future tense only for dates with status=upcoming or today. "
+            "Never say 'will begin' or 'will start' for a date that has already occurred.\n"
+        )
+
     return (
         "You are a BYU-Pathway missionary support assistant. The user is a "
         "SERVICE MISSIONARY who advises students — not a student themselves. "
         "A calendar card was just displayed showing academic dates. Write 1-2 "
         "brief, helpful sentences that directly answer their question based on "
-        "the card data below.\n\n"
+        "the card data below. Then end with a short, relevant follow-up question "
+        "drawn from the card data to keep the conversation natural (e.g. "
+        "'Would you like to check the payment deadline for this block?' or "
+        "'Should I pull up the next block\\'s dates?'). The follow-up question "
+        "MUST relate to something in the source data — do NOT invent topics.\n\n"
         "AUDIENCE: Always refer to students in the third person (e.g. "
         "'students must pay by this date', 'students will be assessed a late fee'). "
         "NEVER use 'you' to mean the student — the missionary is the one reading.\n\n"
         f"TODAY: {today.strftime('%B %d, %Y')}. "
         f"Current block: {season.capitalize()} {today.year} Block {block}. "
-        f"Next block: {next_season.capitalize()} {next_year} Block {next_block}.\n\n"
+        f"Next block: {next_season.capitalize()} {next_year} Block {next_block}.\n"
+        f"Card shows data for: {qy}.\n"
+        f"{tense_context}\n"
         f"BLOCK STATUS (use this — do NOT do your own date math):\n{block_status}\n\n"
         "BLOCK-TO-MONTH MAPPING (use this to verify dates):\n"
         "  Block 1 = Winter Jan–Feb, Block 2 = Winter Mar–Apr\n"
@@ -538,9 +574,11 @@ def _card_explanation_prompt(today: date) -> str:
         "chronological order — NOT a later block.\n"
         "- Do NOT repeat the full list of dates — just answer the question conversationally.\n"
         "- Do NOT start with 'Based on the card' or similar meta-references.\n"
-        "- NEVER say you 'can\'t provide' or 'don\'t have' information that the card "
+        "- NEVER say you 'can\\'t provide' or 'don\\'t have' information that the card "
         "already shows. The card IS your answer — summarize what it shows.\n"
-        "- Use **bold** markdown to emphasize key facts.\n\n"
+        "- Use **bold** markdown to emphasize key facts.\n"
+        "- If conversation history is provided, reference it to stay contextual — "
+        "address any concerns or confusion the user expressed. Keep tone natural.\n\n"
         "REGISTRATION STATUS CHECK (apply when the question is about registration):\n"
         "- Registration is OPEN between the 'Registration Opens' date and the "
         "'Add Course Deadline' (Day 1 of the block/semester).\n"
@@ -554,10 +592,22 @@ def _card_explanation_prompt(today: date) -> str:
     )
 
 
+def _extract_year_from_card(card: dict[str, Any]) -> int | None:
+    """Extract the queried year from card title/subtitle (e.g., 'Winter 2025' → 2025)."""
+    import re as _re
+    for field in ("title", "subtitle"):
+        val = card.get(field) or ""
+        m = _re.search(r"\b(20\d{2})\b", val)
+        if m:
+            return int(m.group(1))
+    return None
+
+
 async def _generate_card_explanation(
     card: dict[str, Any],
     user_query: str,
     source_context: str = "",
+    chat_history: list | None = None,
 ) -> str:
     """Generate a brief explanatory sentence from the card data and source documents."""
     spotlight = card.get("spotlight") or {}
@@ -594,13 +644,27 @@ async def _generate_card_explanation(
         payload_dict["blocks_shown"] = tab_summaries
     if source_context:
         payload_dict["source_documents"] = source_context[:2000]
+
+    # Include recent conversation history for contextual awareness
+    if chat_history:
+        recent = chat_history[-6:]  # Last 3 exchanges (user+assistant pairs)
+        history_lines = []
+        for msg in recent:
+            role = getattr(msg, "role", "user")
+            content = getattr(msg, "content", "") or ""
+            if content.strip():
+                history_lines.append(f"{role}: {content[:200]}")
+        if history_lines:
+            payload_dict["conversation_history"] = history_lines
+
     payload = json.dumps(payload_dict, ensure_ascii=False)
 
     today = date.today()
+    queried_year = _extract_year_from_card(card)
     try:
         response = await Settings.llm.achat(
             messages=[
-                ChatMessage(role=MessageRole.SYSTEM, content=_card_explanation_prompt(today)),
+                ChatMessage(role=MessageRole.SYSTEM, content=_card_explanation_prompt(today, queried_year)),
                 ChatMessage(role=MessageRole.USER, content=payload),
             ],
         )
@@ -615,6 +679,7 @@ async def build_secondary_calendar_text(
     card: dict[str, Any],
     user_query: Optional[str],
     source_context: str = "",
+    chat_history: list | None = None,
 ) -> dict[str, Any]:
     """Build post-card text plan using LLM classification."""
     query = (user_query or "").strip()
@@ -644,7 +709,9 @@ async def build_secondary_calendar_text(
         }
 
     # For calendar_context: generate a brief explanation from the card data + source docs
-    explanation = await _generate_card_explanation(card, query, source_context=source_context)
+    explanation = await _generate_card_explanation(
+        card, query, source_context=source_context, chat_history=chat_history,
+    )
     return {"mode": "calendar_context", "confidence": confidence, "reason": reason, "text": explanation}
 
 
@@ -718,6 +785,7 @@ async def run_calendar_pipeline(
     shared_index: Any,
     user_query: Optional[str] = None,
     user_language: Optional[str] = None,
+    chat_history: list | None = None,
 ) -> tuple[Optional[dict], dict[str, Any]]:
     """Run calendar retrieval+extraction+card build, returning card and metadata."""
     metadata: dict[str, Any] = {}
@@ -738,7 +806,7 @@ async def run_calendar_pipeline(
 
             # Regenerate post-card text for this user's specific question
             secondary_plan = await build_secondary_calendar_text(
-                calendar_args, card, user_query=user_query,
+                calendar_args, card, user_query=user_query, chat_history=chat_history,
             )
             card["secondaryTextMode"] = secondary_plan.get("mode")
             card["secondaryTextConfidence"] = secondary_plan.get("confidence")
@@ -769,6 +837,34 @@ async def run_calendar_pipeline(
 
         logger.info("Calendar pipeline: querying Pinecone...")
         nodes = await query_pinecone_for_calendar(calendar_args, retriever)
+
+        is_semester_term = (
+            scope != "full_year"
+            and calendar_args.query_type.value == "semester"
+            and calendar_args.season
+        )
+
+        if is_semester_term and calendar_args.year:
+            # Semester query (e.g., "Show me Winter 2025"): expand to both blocks
+            _SEASON_BLOCKS = {"winter": (1, 2), "spring": (3, 4), "fall": (5, 6)}
+            lo, hi = _SEASON_BLOCKS.get(calendar_args.season, (1, 2))
+            block_queries = [
+                f"academic calendar {calendar_args.year} block {b} "
+                f"start end dates deadlines"
+                for b in (lo, hi)
+            ]
+            logger.info(
+                "Calendar pipeline: firing %d semester expansion queries in parallel",
+                len(block_queries),
+            )
+            results = await asyncio.gather(
+                *(retriever.aretrieve(q) for q in block_queries),
+                return_exceptions=True,
+            )
+            for result in results:
+                if not isinstance(result, BaseException):
+                    nodes = _merge_nodes(nodes, result, max_nodes=16)
+            metadata["retrieval_mode"] = "semester_expanded"
 
         if (
             scope == "full_year"
@@ -872,6 +968,11 @@ async def run_calendar_pipeline(
         logger.info("Calendar pipeline: extracting structured data...")
         if scope == "full_year":
             extracted = await extract_full_year_by_semester(nodes, calendar_args)
+        elif is_semester_term:
+            # Semester query: extract the 2 blocks for this season
+            extracted = await extract_structured_data(
+                nodes, calendar_args, semester_focus=calendar_args.season
+            )
         else:
             extracted = await extract_structured_data(nodes, calendar_args)
         if not extracted:
@@ -961,6 +1062,7 @@ async def run_calendar_pipeline(
             card,
             user_query=user_query,
             source_context=source_context,
+            chat_history=chat_history,
         )
         card["secondaryTextMode"] = secondary_plan.get("mode")
         card["secondaryTextConfidence"] = secondary_plan.get("confidence")

@@ -1,6 +1,5 @@
 import { Message } from "ai";
 import {
-  Calendar,
   Clock,
   ExternalLink,
   GraduationCap,
@@ -8,6 +7,10 @@ import {
   AlertCircle,
   RefreshCw,
 } from "lucide-react";
+import { BsSnow2 } from "react-icons/bs";
+import { CiCalendar } from "react-icons/ci";
+import { FaCanadianMapleLeaf } from "react-icons/fa";
+import { LuFlower2 } from "react-icons/lu";
 import { useEffect, useMemo, useState } from "react";
 import type {
   CalendarCardData,
@@ -93,17 +96,21 @@ const TIMING = {
 
 const SKELETON_ROW_COUNT = 4;
 
-// --- Card type icon ---
-function CardIcon({ type }: { type: CalendarCardData["type"] }) {
+// --- Card type icon (season-aware) ---
+function CardIcon({
+  type,
+  title,
+}: {
+  type: CalendarCardData["type"];
+  title?: string;
+}) {
   const cls = "w-5 h-5 text-[#002E5D]";
-  switch (type) {
-    case "graduation":
-      return <GraduationCap className={cls} />;
-    case "semester":
-      return <Sprout className={cls} />;
-    default:
-      return <Calendar className={cls} />;
-  }
+  if (type === "graduation") return <GraduationCap className={cls} />;
+  const t = (title ?? "").toLowerCase();
+  if (t.includes("winter")) return <BsSnow2 className={cls} />;
+  if (t.includes("spring")) return <LuFlower2 className={cls} />;
+  if (t.includes("fall")) return <FaCanadianMapleLeaf className={cls} />;
+  return <CiCalendar className={cls} />;
 }
 
 // --- Status badge ---
@@ -409,6 +416,14 @@ export function CalendarCard({
 
   const dataReady = !!cardData.title;
 
+  // Compute max events across all tabs (or flat list) for timer cap
+  const maxEvents = useMemo(() => {
+    if (cardData.tabs?.length) {
+      return Math.max(...cardData.tabs.map((t) => t.events?.length ?? 0));
+    }
+    return cardData.events?.length ?? 0;
+  }, [cardData.tabs, cardData.events]);
+
   const [mounted, setMounted] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [showStallNotice, setShowStallNotice] = useState(false);
@@ -421,10 +436,16 @@ export function CalendarCard({
   useEffect(() => {
     if (!dataReady) return;
     const start = Date.now();
-    // Dynamic stop: enough for footer + generous buffer.
-    // With 380ms/row, 20 events → rowBase(4300) + 20*380 + footer(1200) ≈ 13100.
-    // 20s cap comfortably handles up to ~40 events per tab.
-    const stop = 20000;
+    // Dynamic stop: scales with event count so no row is left as shimmer.
+    // With 380ms/row, 13 events → ~9.2s, 20 events → ~12s.
+    // 2s buffer ensures footer always resolves.
+    const stop = Math.max(
+      20000,
+      TIMING.rowBase +
+        Math.max(maxEvents, SKELETON_ROW_COUNT) * TIMING.rowInterval +
+        TIMING.footerDelay +
+        2000,
+    );
     const id = setInterval(() => {
       const now = Date.now() - start;
       setElapsed(now);
@@ -434,7 +455,7 @@ export function CalendarCard({
       clearInterval(id);
       setElapsed(0);
     };
-  }, [dataReady]);
+  }, [dataReady, maxEvents]);
 
   useEffect(() => {
     if (dataReady || state?.phase !== "skeleton") {
@@ -497,7 +518,7 @@ export function CalendarCard({
             <div className={`${styles.headerReveal} w-full min-w-0`}>
               <div className="flex items-start gap-2 sm:gap-3 min-w-0">
                 <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-[hsl(var(--header-bg))] to-amber-500 flex items-center justify-center shadow-[0_4px_12px_rgba(255,195,40,0.18)] shrink-0 mt-0.5">
-                  <CardIcon type={cardData.type ?? "block"} />
+                  <CardIcon type={cardData.type ?? "block"} title={cardData.title} />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-1.5 sm:gap-2 min-w-0">
@@ -625,7 +646,7 @@ export function CalendarCard({
                 // Yellow bg (#FFC328) + dark text (#002E5D) — bg is decorative, text contrast is fine
                 className="inline-flex items-center gap-1.5 text-[11.5px] sm:text-[12.5px] font-semibold text-[#002E5D] dark:text-[#002E5D] bg-[hsl(var(--header-bg))] hover:bg-amber-300 dark:hover:bg-amber-300 px-3 sm:px-4 py-1.5 rounded-lg transition-all hover:-translate-y-px hover:shadow-[0_4px_12px_rgba(255,195,40,0.25)]"
               >
-                <Calendar className="w-3.5 h-3.5" />
+                <CiCalendar className="w-3.5 h-3.5" />
                 {calendarYear ? `Open ${calendarYear} Calendar` : "Open Calendar"}
               </button>
             </div>
