@@ -72,7 +72,8 @@ def _season_block_for_month(month: int) -> tuple[str, int]:
 
 
 _CALENDAR_INTRO_PATTERN = re.compile(
-	r"^Here(?:'s| are) the\s+(?:key\s+)?(?:dates?|deadlines?|registration|"
+	r"^Here(?:'s| are) the\s+(?:key\s+)?(?:dates?|deadlines?|registration|application|"
+	r"payment|drop|withdraw|tuition|grades?|refund|"
 	r"graduation|full|academic|calendar|block|semester|winter|spring|fall)",
 	re.IGNORECASE,
 )
@@ -90,6 +91,54 @@ def _has_recent_calendar_response(
 		if "assistant" in role.lower() and _CALENDAR_INTRO_PATTERN.search(content):
 			return content
 	return None
+
+
+_DEADLINE_KEYWORDS = {
+	"registration": "registration",
+	"application": "application",
+	"payment": "payment",
+	"tuition": "payment",
+	"drop": "drop",
+	"withdraw": "withdraw",
+	"grades": "grades",
+	"refund": "refund",
+	"late fee": "late_fees",
+}
+
+
+def _prior_card_matches_new_args(prior_intro: str, args_dict: dict) -> bool:
+	"""Return True if the new tool call would produce the same card already shown."""
+	intro_lower = prior_intro.lower()
+
+	block_match = re.search(r"block\s*(\d)", intro_lower)
+	prior_block = int(block_match.group(1)) if block_match else None
+
+	prior_deadline = None
+	for keyword, canonical in _DEADLINE_KEYWORDS.items():
+		if keyword in intro_lower:
+			prior_deadline = canonical
+			break
+
+	scope_match = re.search(r"\bfull.year\b", intro_lower)
+	prior_full_year = bool(scope_match)
+
+	new_block = args_dict.get("block_number")
+	new_deadline = args_dict.get("specific_deadline")
+	new_full_year = (args_dict.get("scope") or "").lower() == "full_year"
+
+	# Full-year repeat
+	if prior_full_year and new_full_year:
+		return True
+
+	# Same block: check deadline type too
+	if prior_block and new_block and prior_block == new_block:
+		if new_deadline and prior_deadline:
+			return new_deadline == prior_deadline
+		# Both are general block views (no specific deadline)
+		if not new_deadline and not prior_deadline:
+			return True
+
+	return False
 
 
 _ROUTER_SYSTEM_PROMPT_TEMPLATE = (
@@ -222,7 +271,7 @@ def _extract_block_context(text: str) -> tuple[Optional[str], Optional[int], Opt
 	lowered = (text or "").lower()
 	season_match = re.search(r"\b(winter|spring|fall|summer)\b", lowered)
 	year_match = re.search(r"\b(20\d{2})\b", lowered)
-	block_match = re.search(r"\b(?:block|term|semester)\s*([1-6])\b", lowered)
+	block_match = re.search(r"\b(?:block|blok|blck|term|semester|b)\s*([1-6])\b", lowered)
 
 	season = season_match.group(1) if season_match else None
 	year = int(year_match.group(1)) if year_match else None
@@ -428,6 +477,18 @@ async def detect_calendar_intent_via_llm(
 			# Deterministic override: if the user didn't specify a season/block
 			# explicitly, force the NEXT block so the nearest future dates appear.
 			_apply_next_block_default(args_dict, message, user_timezone)
+
+			# Follow-up suppression: if a calendar card was already shown
+			# and the new args match it, skip the calendar pipeline so RAG
+			# can answer the follow-up conversationally.
+			if prior_card_intro and _prior_card_matches_new_args(
+				prior_card_intro, args_dict
+			):
+				logger.info(
+					"Calendar router: suppressing duplicate card — "
+					"same data already shown, deferring to RAG"
+				)
+				return None, None
 
 			args_dict.setdefault("timezone", user_timezone)
 			args_dict.setdefault("scope", "term")

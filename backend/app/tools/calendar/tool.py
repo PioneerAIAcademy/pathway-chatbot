@@ -443,6 +443,21 @@ async def extract_structured_data(
 			if scope == "full_year"
 			else _MAX_EXTRACTION_ATTEMPTS
 		)
+		# For single-block queries, filter to the specific block chunk
+		# to prevent cross-block confusion (e.g., picking Block 1's
+		# Application Deadline instead of Block 2's).
+		if args.block_number and scope != "full_year":
+			bn = args.block_number
+			target_labels = (
+				f"Block/Term {bn}",
+				f"Block {bn}",
+			)
+			targeted = [
+				n for n in nodes
+				if any(label in (getattr(n, "text", "") or "")[:80] for label in target_labels)
+			]
+			if targeted:
+				nodes = targeted
 
 	context_parts: list[str] = []
 	total_chars = 0
@@ -485,6 +500,13 @@ async def extract_structured_data(
 			f"Populate the 'blocks' field with exactly 2 blocks. "
 			f"Each block MUST have its own 13 events with DIFFERENT dates. "
 			f"Block {blocks[0]} events occur BEFORE Block {blocks[1]} events."
+		)
+	elif args.block_number and scope != "full_year":
+		system_content += (
+			f"\nIMPORTANT: Extract dates ONLY for Block {args.block_number}. "
+			f"The documents may contain data for multiple blocks — "
+			f"use ONLY the row/section labeled 'Block/Term {args.block_number}'. "
+			f"Do NOT return dates from any other block."
 		)
 
 	user_content = f"Extract calendar data for: {query_desc}\n\nDocuments:\n{context}"

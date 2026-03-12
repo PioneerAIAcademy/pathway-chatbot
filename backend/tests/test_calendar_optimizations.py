@@ -887,3 +887,82 @@ class TestTabBuilding:
         for i, tab in enumerate(card["tabs"]):
             assert f"{i+1}" in tab["label"]
             assert len(tab["events"]) >= 1
+
+
+# ── Follow-up RAG fallback + regex improvements ────────────────────────
+
+from app.tools.calendar.router import (
+    _extract_block_context,
+    _prior_card_matches_new_args,
+)
+
+
+class TestExtractBlockContextRegex:
+    """Test that the block regex handles misspellings and shorthand."""
+
+    def test_standard_block(self):
+        _, _, block = _extract_block_context("application deadline for block 2")
+        assert block == 2
+
+    def test_misspelled_blok(self):
+        _, _, block = _extract_block_context("aplication deadlin for blok 2")
+        assert block == 2
+
+    def test_shorthand_b4(self):
+        _, _, block = _extract_block_context("b4 payment due date")
+        assert block == 4
+
+    def test_misspelled_blck(self):
+        _, _, block = _extract_block_context("blck 5 grades")
+        assert block == 5
+
+    def test_term_synonym(self):
+        _, _, block = _extract_block_context("term 3 registration")
+        assert block == 3
+
+    def test_semester_synonym(self):
+        _, _, block = _extract_block_context("semester 1 start date")
+        assert block == 1
+
+    def test_no_block(self):
+        _, _, block = _extract_block_context("when is the payment deadline")
+        assert block is None
+
+
+class TestPriorCardMatchesNewArgs:
+    """Test follow-up suppression logic."""
+
+    def test_same_block_same_deadline(self):
+        intro = "Here's the application deadline for Winter 2026 — Block 2:"
+        args = {"block_number": 2, "specific_deadline": "application"}
+        assert _prior_card_matches_new_args(intro, args) is True
+
+    def test_same_block_different_deadline(self):
+        intro = "Here's the registration deadline for Winter 2026 — Block 2:"
+        args = {"block_number": 2, "specific_deadline": "payment"}
+        assert _prior_card_matches_new_args(intro, args) is False
+
+    def test_different_block_same_deadline(self):
+        intro = "Here's the application deadline for Winter 2026 — Block 2:"
+        args = {"block_number": 3, "specific_deadline": "application"}
+        assert _prior_card_matches_new_args(intro, args) is False
+
+    def test_same_block_general_view(self):
+        intro = "Here are the key dates for Winter 2026 — Block 2:"
+        args = {"block_number": 2}
+        assert _prior_card_matches_new_args(intro, args) is True
+
+    def test_full_year_repeat(self):
+        intro = "Here are the full year dates for 2026:"
+        args = {"scope": "full_year"}
+        assert _prior_card_matches_new_args(intro, args) is True
+
+    def test_full_year_vs_block(self):
+        intro = "Here are the full year dates for 2026:"
+        args = {"block_number": 2, "specific_deadline": "application"}
+        assert _prior_card_matches_new_args(intro, args) is False
+
+    def test_no_prior_block_no_match(self):
+        intro = "Here are the key dates:"
+        args = {"block_number": 3, "specific_deadline": "payment"}
+        assert _prior_card_matches_new_args(intro, args) is False
