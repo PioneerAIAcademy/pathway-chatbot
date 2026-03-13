@@ -641,7 +641,7 @@ def _build_calendar_patches(
                     "sourceUrl": calendar_data.get("sourceUrl", ""),
                     "suggestedQuestions": calendar_data.get("suggestedQuestions", []),
                     "footnote": calendar_data.get("footnote"),
-                    "textFormatOffer": "Would you like me to list these dates in text format instead?",
+                    "textFormatOffer": "Should I list these dates in text format instead?",
                 },
                 "trace_id": trace_id,
             }

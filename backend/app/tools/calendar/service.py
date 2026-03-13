@@ -549,12 +549,15 @@ def _card_explanation_prompt(today: date, queried_year: int | None = None) -> st
         "brief, helpful sentences that directly answer their question based on "
         "the card data below. Then end with a short, relevant follow-up question "
         "drawn from the card data to keep the conversation natural (e.g. "
-        "'Would you like to check the payment deadline for this block?' or "
-        "'Should I pull up the next block\\'s dates?'). The follow-up question "
-        "MUST relate to something in the source data — do NOT invent topics.\n\n"
+        "'Should I pull up Block 2\\'s dates as well?' or "
+        "'Should I summarize the semester deadlines in text format?'). The "
+        "follow-up question MUST relate to something in the source data — do "
+        "NOT invent topics.\n\n"
         "AUDIENCE: Always refer to students in the third person (e.g. "
         "'students must pay by this date', 'students will be assessed a late fee'). "
-        "NEVER use 'you' to mean the student — the missionary is the one reading.\n\n"
+        "NEVER use 'you' to mean the student — the missionary is the one reading. "
+        "Avoid second-person pronouns ('you', 'your') entirely, including in the "
+        "follow-up question.\n\n"
         f"TODAY: {today.strftime('%B %d, %Y')}. "
         f"Current block: {season.capitalize()} {today.year} Block {block}. "
         f"Next block: {next_season.capitalize()} {next_year} Block {next_block}.\n"
@@ -570,15 +573,27 @@ def _card_explanation_prompt(today: date, queried_year: int | None = None) -> st
         "Rules:\n"
         "- Use the blocks_shown and key_events fields as your data source. "
         "Each event has its date and status (past/upcoming).\n"
+        "- For multi-block cards, use block_start and block_end from blocks_shown "
+        "for the actual block range. Do NOT treat registration or grades dates as "
+        "the block's start/end.\n"
+        "- If multiple blocks are shown, describe the semester or full year across "
+        "those blocks. Do NOT reduce the answer to only the first block or active tab.\n"
+        "- When multiple blocks are shown, refer to the shown scope as a semester "
+        "or full-year calendar — not 'the block' unless the question was block-specific.\n"
         "- If a key deadline has already passed (status=past), mention THE VERY NEXT one in "
         "chronological order — NOT a later block.\n"
         "- Do NOT repeat the full list of dates — just answer the question conversationally.\n"
+        "- Keep the answer concise: about 45-60 words before the follow-up question.\n"
+        "- For multi-block cards, mention at most one or two representative dates total unless "
+        "the user explicitly asks for a detailed breakdown.\n"
         "- Do NOT start with 'Based on the card' or similar meta-references.\n"
         "- NEVER say you 'can\\'t provide' or 'don\\'t have' information that the card "
         "already shows. The card IS your answer — summarize what it shows.\n"
         "- Use **bold** markdown to emphasize key facts.\n"
         "- If conversation history is provided, reference it to stay contextual — "
         "address any concerns or confusion the user expressed. Keep tone natural.\n\n"
+        "- For multi-block cards, keep the follow-up question within the shown scope "
+        "unless the conversation explicitly asks to move to a different block, semester, or year.\n\n"
         "REGISTRATION STATUS CHECK (apply when the question is about registration):\n"
         "- Registration is OPEN between the 'Registration Opens' date and the "
         "'Add Course Deadline' (Day 1 of the block/semester).\n"
@@ -603,20 +618,15 @@ def _extract_year_from_card(card: dict[str, Any]) -> int | None:
     return None
 
 
-async def _generate_card_explanation(
+def _build_card_explanation_payload(
     card: dict[str, Any],
     user_query: str,
     source_context: str = "",
     chat_history: list | None = None,
-) -> str:
-    """Generate a brief explanatory sentence from the card data and source documents."""
+) -> dict[str, Any]:
     spotlight = card.get("spotlight") or {}
-    events = card.get("events") or []
-    event_summaries = [
-        f"{evt.get('name')}: {evt.get('date')} ({evt.get('status', '')})"
-        for evt in events
-        if isinstance(evt, dict)
-    ]
+    tabs = card.get("tabs") or []
+
     payload_dict: dict[str, Any] = {
         "user_question": user_query,
         "card_title": card.get("title"),
@@ -627,27 +637,68 @@ async def _generate_card_explanation(
             "status": spotlight.get("status"),
             "countdown": spotlight.get("countdown"),
         } if spotlight else None,
-        "key_events": event_summaries,
     }
-    tabs = card.get("tabs") or []
+
     if tabs:
-        tab_summaries = []
+        block_summaries: list[dict[str, Any]] = []
+        cross_block_events: list[str] = []
         for tab in tabs:
             label = tab.get("label", "")
-            tab_events = tab.get("events") or []
-            # Include ALL events per tab with dates so the LLM has full context
-            tab_event_details = [
-                f"{e.get('name')}: {e.get('date')} ({e.get('status', '')})"
-                for e in tab_events if isinstance(e, dict)
+            tab_events = [
+                e for e in (tab.get("events") or [])
+                if isinstance(e, dict) and e.get("date") and e.get("name")
             ]
-            tab_summaries.append(f"{label}: {', '.join(tab_event_details)}")
-        payload_dict["blocks_shown"] = tab_summaries
+            tab_events.sort(key=lambda e: e.get("date", ""))
+            block_start = next(
+                (
+                    e.get("date")
+                    for e in tab_events
+                    if str(e.get("name", "")).strip().lower() == "start"
+                ),
+                tab_events[0].get("date") if tab_events else None,
+            )
+            block_end = next(
+                (
+                    e.get("date")
+                    for e in tab_events
+                    if str(e.get("name", "")).strip().lower() == "end"
+                ),
+                tab_events[-1].get("date") if tab_events else None,
+            )
+            event_details = [
+                f"{e.get('name')}: {e.get('date')} ({e.get('status', '')})"
+                for e in tab_events
+            ]
+            block_summaries.append(
+                {
+                    "label": label,
+                    "block_start": block_start,
+                    "block_end": block_end,
+                    "event_count": len(tab_events),
+                    "events": event_details[:4],
+                }
+            )
+            cross_block_events.extend(
+                [f"{label} — {detail}" for detail in event_details[:3]]
+            )
+
+        payload_dict["card_scope"] = "full_year" if len(tabs) >= 6 else "semester"
+        payload_dict["blocks_shown"] = block_summaries
+        payload_dict["key_events"] = cross_block_events[:18]
+    else:
+        events = card.get("events") or []
+        payload_dict["card_scope"] = "single_block"
+        payload_dict["key_events"] = [
+            f"{evt.get('name')}: {evt.get('date')} ({evt.get('status', '')})"
+            for evt in events
+            if isinstance(evt, dict)
+        ]
+
     if source_context:
         payload_dict["source_documents"] = source_context[:2000]
 
-    # Include recent conversation history for contextual awareness
     if chat_history:
-        recent = chat_history[-6:]  # Last 3 exchanges (user+assistant pairs)
+        recent = chat_history[-6:]
         history_lines = []
         for msg in recent:
             role = getattr(msg, "role", "user")
@@ -657,6 +708,22 @@ async def _generate_card_explanation(
         if history_lines:
             payload_dict["conversation_history"] = history_lines
 
+    return payload_dict
+
+
+async def _generate_card_explanation(
+    card: dict[str, Any],
+    user_query: str,
+    source_context: str = "",
+    chat_history: list | None = None,
+) -> str:
+    """Generate a brief explanatory sentence from the card data and source documents."""
+    payload_dict = _build_card_explanation_payload(
+        card,
+        user_query,
+        source_context=source_context,
+        chat_history=chat_history,
+    )
     payload = json.dumps(payload_dict, ensure_ascii=False)
 
     today = date.today()
@@ -762,6 +829,67 @@ def build_calendar_intro(args: CalendarToolArgs) -> str:
     if season:
         return f"Here's the {season} {year} calendar:"
     return f"Here's the academic calendar for {year}:"
+
+
+def _format_text_date(value: Any) -> str:
+    if value is None:
+        return ""
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    try:
+        parsed = date.fromisoformat(raw)
+    except Exception:
+        return raw
+    return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
+
+
+def build_calendar_text_response(card: dict[str, Any]) -> str:
+    """Convert an already-built calendar card into a deterministic plain-text list."""
+    title = str(card.get("title") or "Academic Calendar").strip()
+    subtitle = str(card.get("subtitle") or "").strip()
+    tabs = card.get("tabs") or []
+    events = card.get("events") or []
+    footnote = str(card.get("footnote") or "").strip()
+
+    intro = f"Here are the key dates for {title} in text format:"
+    lines: list[str] = [intro]
+
+    if subtitle:
+        lines.extend(["", subtitle])
+
+    if tabs:
+        for tab in tabs:
+            label = str(tab.get("label") or "").strip()
+            tab_events = tab.get("events") or []
+            if not label or not tab_events:
+                continue
+            lines.extend(["", f"{label}:"])
+            for event in tab_events:
+                name = str(event.get("name") or "").strip()
+                if not name:
+                    continue
+                event_date = _format_text_date(event.get("date"))
+                if event_date:
+                    lines.append(f"- {name}: {event_date}")
+                else:
+                    lines.append(f"- {name}")
+    elif events:
+        lines.append("")
+        for event in events:
+            name = str(event.get("name") or "").strip()
+            if not name:
+                continue
+            event_date = _format_text_date(event.get("date"))
+            if event_date:
+                lines.append(f"- {name}: {event_date}")
+            else:
+                lines.append(f"- {name}")
+
+    if footnote:
+        lines.extend(["", footnote])
+
+    return "\n".join(lines).strip()
 
 
 def build_initial_calendar_metadata(args: CalendarToolArgs) -> dict[str, Any]:

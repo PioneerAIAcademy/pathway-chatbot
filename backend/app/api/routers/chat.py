@@ -1,6 +1,7 @@
 import logging
 import hashlib
 import time
+import re
 from typing import Tuple, List, Dict, Any, Optional
 from collections import defaultdict
 import traceback
@@ -33,6 +34,7 @@ from app.langfuse import langfuse
 from app.utils.geo_ip import get_geo_data
 from app.tools.calendar import (
     build_calendar_intro,
+    build_calendar_text_response,
     build_initial_calendar_metadata,
     detect_calendar_intent_via_llm,
     localize_calendar_intro,
@@ -40,18 +42,74 @@ from app.tools.calendar import (
 )
 from app.tools.calendar.router import (
     _find_original_calendar_question,
+    _has_recent_calendar_response,
     _is_calendar_retry,
+    _parse_prior_calendar_context,
 )
+from app.tools.calendar.schema import CalendarToolArgs
 import os
 
 chat_router = r = APIRouter()
 
 logger = logging.getLogger("uvicorn")
 
+_TEXT_FORMAT_REQUEST_PATTERN = re.compile(
+    r"\b(?:text\s+format|list(?:\s+these)?\s+dates(?:\s+in\s+text\s+format)?|"
+    r"summar(?:y|ize).*(?:dates|deadlines).*(?:text))\b",
+    re.IGNORECASE,
+)
+
 
 def _is_calendar_secondary_text_enabled() -> bool:
     value = os.getenv("CALENDAR_SECONDARY_TEXT_ENABLED", "true").strip().lower()
     return value in {"1", "true", "yes", "on"}
+
+
+def _get_client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("X-Forwarded-For", "").strip()
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return ""
+
+
+class _StaticResponse:
+    def __init__(self, message: str):
+        self.response = message
+        self.source_nodes: list[Any] = []
+
+    async def async_response_gen(self):
+        yield self.response
+
+
+def _is_text_format_request(message: str) -> bool:
+    return bool(_TEXT_FORMAT_REQUEST_PATTERN.search(message or ""))
+
+
+def _resolve_text_format_followup_args(
+    message: str,
+    chat_history: List[Any],
+) -> Optional[CalendarToolArgs]:
+    if not _is_text_format_request(message):
+        return None
+
+    prior_intro = _has_recent_calendar_response(chat_history)
+    if not prior_intro:
+        return None
+
+    scoped = _parse_prior_calendar_context(prior_intro)
+    if not scoped.get("query_type"):
+        return None
+
+    args_payload = {
+        "query_type": scoped.get("query_type"),
+        "scope": scoped.get("scope") or "term",
+        "season": scoped.get("season"),
+        "year": scoped.get("year"),
+        "block_number": scoped.get("block_number"),
+    }
+    return CalendarToolArgs(**args_payload)
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -88,9 +146,7 @@ async def chat(
         
         # Get real client IP and geo data BEFORE security validation
         # This ensures we capture IP/location for both blocked and allowed requests
-        client_ip = request.headers.get("X-Forwarded-For", request.client.host)
-        if "," in client_ip:
-            client_ip = client_ip.split(",")[0].strip()
+        client_ip = _get_client_ip(request)
         
         geo_data = await get_geo_data(client_ip)
         
@@ -275,6 +331,7 @@ async def chat(
         user_timezone = request.headers.get("X-Timezone", "UTC")
         calendar_args = None
         calendar_clarification = None
+        calendar_text_followup = False
 
         # If the user clicked "Try again" on a failed calendar card, the
         # frontend sends a canned retry message.  Resolve the original
@@ -301,12 +358,31 @@ async def chat(
         except Exception as e:
             logger.error(f"Calendar intent detection failed: {e}")
 
+        if calendar_args is None and calendar_clarification is None:
+            text_format_args = _resolve_text_format_followup_args(
+                last_message_content,
+                messages,
+            )
+            if text_format_args is not None:
+                calendar_args = text_format_args
+                calendar_text_followup = True
+                logger.info(
+                    "Calendar text-format follow-up resolved from prior card: "
+                    "query_type=%s block=%s season=%s year=%s",
+                    calendar_args.query_type.value,
+                    calendar_args.block_number,
+                    calendar_args.season,
+                    calendar_args.year,
+                )
+
         if calendar_args is not None:
             logger.info(
                 f"Calendar intent detected: {calendar_args.query_type.value}, "
                 f"block={calendar_args.block_number}, season={calendar_args.season}"
             )
             calendar_metadata.update(build_initial_calendar_metadata(calendar_args))
+            if calendar_text_followup:
+                calendar_metadata["response_mode"] = "text_format"
 
         # Build the calendar pipeline that runs concurrently with the chat stream.
         # Intent detection is already done; this only does retrieval + extraction.
@@ -353,7 +429,9 @@ async def chat(
                     "If the question is about a calendar item (e.g. a deadline), explain what it means, "
                     "what happens if it's missed, and any steps the student should take. "
                     "If the question has a non-calendar component, answer that part instead. "
-                    "Do NOT repeat the dates already shown in the card.\n\n"
+                    "Do NOT repeat the dates already shown in the card. "
+                    "Avoid second-person pronouns such as 'you' and 'your'. "
+                    "Refer to students or missionaries in the third person instead.\n\n"
                     f"User message: {last_message_content}"
                 )
                 response = await rag_engine.achat(followup_prompt, messages)
@@ -443,6 +521,57 @@ async def chat(
 
         # When calendar intent is detected, skip the RAG engine entirely.
         # The card shows the data; we just need a short intro sentence.
+        if calendar_clarification and calendar_args is None:
+            streaming_response_returned = True
+            return VercelStreamResponse(
+                request,
+                event_handler,
+                _StaticResponse(calendar_clarification),
+                data,
+                trace_id=trace_id,
+                user_language=user_language,
+                skip_suggestions=True,
+                on_stream_end=_on_stream_end,
+                emit_initial_status=False,
+            )
+
+        if calendar_text_followup and calendar_args is not None:
+            card, pipeline_metadata = await run_calendar_pipeline(
+                calendar_args,
+                shared_index,
+                user_query=last_message_content,
+                user_language=user_language,
+                chat_history=messages,
+            )
+            if pipeline_metadata:
+                calendar_metadata.update(pipeline_metadata)
+
+            if card is not None:
+                text_only_response = build_calendar_text_response(card)
+            elif pipeline_metadata.get("pipeline_status") == "unsupported_year":
+                requested_year = pipeline_metadata.get("requested_year")
+                text_only_response = (
+                    f"I don't have verified academic calendar dates for {requested_year} yet. "
+                    "Please refer to the Academic Calendar source for confirmed dates."
+                )
+            else:
+                text_only_response = (
+                    "I couldn't find the calendar dates to list in text format right now."
+                )
+
+            streaming_response_returned = True
+            return VercelStreamResponse(
+                request,
+                event_handler,
+                _StaticResponse(text_only_response),
+                data,
+                trace_id=trace_id,
+                user_language=user_language,
+                skip_suggestions=True,
+                on_stream_end=_on_stream_end,
+                emit_initial_status=False,
+            )
+
         calendar_intro: Optional[str] = None
         if calendar_args is not None:
             calendar_intro = build_calendar_intro(calendar_args)
@@ -553,9 +682,7 @@ async def chat_request(
         
         # Get real client IP and geo data BEFORE security validation
         # This ensures we capture IP/location for both blocked and allowed requests
-        client_ip = request.headers.get("X-Forwarded-For", request.client.host)
-        if "," in client_ip:
-            client_ip = client_ip.split(",")[0].strip()
+        client_ip = _get_client_ip(request)
         
         geo_data = await get_geo_data(client_ip)
         
@@ -855,9 +982,7 @@ async def general_feedback(
     session_id = request.headers.get("X-Session-ID", request.headers.get("X-Session-Id"))
     device_id = request.headers.get("X-Device-ID")
 
-    client_ip = request.headers.get("X-Forwarded-For", request.client.host)
-    if "," in client_ip:
-        client_ip = client_ip.split(",")[0].strip()
+    client_ip = _get_client_ip(request)
 
     geo_data = await get_geo_data(client_ip)
 

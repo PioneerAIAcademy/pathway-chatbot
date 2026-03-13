@@ -78,6 +78,36 @@ _CALENDAR_INTRO_PATTERN = re.compile(
 	re.IGNORECASE,
 )
 
+_BROAD_CALENDAR_FOLLOWUP_PATTERN = re.compile(
+	r"\b(?:show|display|pull up)\b.*\b(?:all\s+)?(?:key\s+)?(?:dates?|deadlines?|calendar)\b"
+	r"|\b(?:all\s+)?(?:key\s+)?(?:dates?|deadlines?)\b",
+	re.IGNORECASE,
+)
+
+_FULL_YEAR_REQUEST_PATTERN = re.compile(
+	r"\b(?:full|whole|entire)\s+year\b|\ball\s+blocks\b",
+	re.IGNORECASE,
+)
+
+_ANY_TERM_NUMBER_PATTERN = re.compile(
+	r"\b(?:block|blok|blck|term|semester|b)\s*(\d{1,2})\b",
+	re.IGNORECASE,
+)
+
+_GENERAL_OVERVIEW_PATTERN = re.compile(
+	r"\b(?:academic\s+calendar|important\s+dates|key\s+dates|start\s+dates|"
+	r"show\s+me\s+an?\s+academic\s+calendar|show\s+the\s+academic\s+calendar)\b",
+	re.IGNORECASE,
+)
+
+_POLICY_ONLY_PATTERN = re.compile(
+	r"\b(?:what\s+does|difference\s+between|what\s+happens|consequences?|"
+	r"exceptions?|appeal|how\s+to|how\s+do|how\s+can|how\s+long|"
+	r"help\s+me\s+find|find\s+information|provide\s+a\s+link|give\s+me\s+a\s+link|"
+	r"where\s+can|where\s+is|what\s+should\s+(?:a\s+student|students)\s+do)\b",
+	re.IGNORECASE,
+)
+
 
 def _has_recent_calendar_response(
 	chat_history: Optional[List[ChatMessage]],
@@ -180,7 +210,9 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = (
 	"ALWAYS call the tool for the calendar part. The non-calendar part will be "
 	"handled separately — your only job is to detect and route the calendar intent.\n"
 	"4. If AMBIGUOUS with NO clear calendar intent, ask a brief clarification "
-	"question — do NOT call the tool.\n"
+	"question — do NOT call the tool. Clarification questions must avoid "
+	"second-person pronouns; use neutral phrasing such as 'Which year should "
+	"be checked for Term 2?' or 'Should the answer use this term or the next term?'\n"
 	"5. If clearly NOT calendar, return an empty message — do NOT call the tool.\n\n"
 	"KEY DISTINCTION: 'When is the payment deadline FOR BLOCK 5' → specific → "
 	"CALL tool. 'When is the deadline to make payment' → general policy → "
@@ -213,6 +245,10 @@ _ROUTER_SYSTEM_PROMPT_TEMPLATE = (
 	"or 'all blocks', set scope='full_year'.\n"
 	"- For follow-up messages like 'show me the card', use conversation history "
 	"to determine what calendar data they mean.\n"
+	"- If the user names a block/term/semester but omits the year, assume the "
+	"CURRENT academic year unless conversation history clearly points to a different year.\n"
+	"- If the user asks broadly for the academic calendar or important dates with no "
+	"specific year, default to the CURRENT academic year and use scope='full_year'.\n"
 	"- CONVERSATIONAL SCOPING: If the user says something broad like "
 	"'show me all key deadlines' or 'show me all dates', check conversation "
 	"history. If the conversation was about a specific block/semester (e.g. "
@@ -294,6 +330,205 @@ def _extract_year(text: str) -> Optional[int]:
 	return int(match.group(1)) if match else None
 
 
+def _is_general_overview_request(text: str) -> bool:
+	return bool(_GENERAL_OVERVIEW_PATTERN.search(text or ""))
+
+
+def _is_policy_only_question(text: str) -> bool:
+	return bool(_POLICY_ONLY_PATTERN.search(text or ""))
+
+
+def _extract_any_term_number(text: str) -> Optional[int]:
+	match = _ANY_TERM_NUMBER_PATTERN.search(text or "")
+	if not match:
+		return None
+	try:
+		return int(match.group(1))
+	except Exception:
+		return None
+
+
+def _invalid_term_number_response(term_number: int) -> str:
+	return (
+		f"The current academic calendar lists only Blocks 1 through 6 each year: "
+		f"Winter (Blocks 1-2), Spring (Blocks 3-4), and Fall (Blocks 5-6). "
+		f"There is no Term {term_number} in the source calendar. "
+		"If helpful, I can pull up a valid block or the full academic calendar."
+	)
+
+
+def _parse_prior_calendar_context(prior_intro: str) -> dict[str, Optional[int | str]]:
+	"""Extract scope cues from the intro line of the previously shown calendar card."""
+	intro = ((prior_intro or "").splitlines() or [""])[0].strip()
+	lowered = intro.lower()
+	season, year, block = _extract_block_context(intro)
+	full_year = bool(
+		re.search(r"\bfull\s+\d{4}\s+academic\s+calendar\b", lowered)
+		or (
+			"academic calendar" in lowered
+			and "block" not in lowered
+			and not season
+		)
+	)
+
+	if full_year:
+		return {
+			"query_type": "semester",
+			"scope": "full_year",
+			"season": None,
+			"year": year,
+			"block_number": None,
+		}
+
+	if block is not None:
+		return {
+			"query_type": "block",
+			"scope": "term",
+			"season": season,
+			"year": year,
+			"block_number": block,
+		}
+
+	if season or year:
+		return {
+			"query_type": "semester",
+			"scope": "term",
+			"season": season,
+			"year": year,
+			"block_number": None,
+		}
+
+	return {
+		"query_type": None,
+		"scope": None,
+		"season": None,
+		"year": None,
+		"block_number": None,
+	}
+
+
+def _normalize_clarification_text(text: str) -> str:
+	clean = (text or "").strip()
+	if not clean:
+		return clean
+
+	replacements: list[tuple[str, str]] = [
+		(
+			r"^Could you please clarify if you are asking about (.+)\?$",
+			r"Which option should be checked: \1?",
+		),
+		(
+			r"^Could you please clarify which (.+?) you are referring to(?: for .+)?\?$",
+			r"Which \1 should be checked?",
+		),
+		(
+			r"^Could you please specify which (.+?) you are referring to(?: for .+)?\?$",
+			r"Which \1 should be checked?",
+		),
+		(
+			r"^Could you please specify if you are asking about (.+)\?$",
+			r"Which option should be checked: \1?",
+		),
+		(
+			r"^I can help with that!\s*Could you please specify if you'?re asking about (.+)\?$",
+			r"Which option should be checked: \1?",
+		),
+	]
+
+	for pattern, replacement in replacements:
+		if re.match(pattern, clean, re.IGNORECASE):
+			return re.sub(pattern, replacement, clean, flags=re.IGNORECASE)
+
+	return clean
+
+
+def _default_year_for_message(user_timezone: str) -> int:
+	try:
+		today = datetime.now(ZoneInfo(user_timezone)).date()
+	except Exception:
+		today = datetime.now(ZoneInfo("UTC")).date()
+	return today.year
+
+
+def _build_default_overview_args(
+	message: str,
+	user_timezone: str,
+) -> Optional[CalendarToolArgs]:
+	explicit_season, explicit_year, explicit_block = _extract_block_context(message)
+	if explicit_year or explicit_season or explicit_block:
+		return None
+	if not _is_general_overview_request(message):
+		return None
+
+	return CalendarToolArgs(
+		query_type="semester",
+		year=_default_year_for_message(user_timezone),
+		scope="full_year",
+		timezone=user_timezone,
+	)
+
+
+def _apply_missing_year_default(
+	args_dict: dict,
+	message: str,
+	user_timezone: str,
+) -> None:
+	if args_dict.get("year"):
+		return
+	explicit_season, explicit_year, explicit_block = _extract_block_context(message)
+	if explicit_year:
+		return
+	if explicit_block or explicit_season:
+		args_dict["year"] = _default_year_for_message(user_timezone)
+
+
+def _apply_conversational_scope(
+	args_dict: dict,
+	message: str,
+	prior_card_intro: Optional[str],
+) -> None:
+	"""Scope broad follow-up requests to the subject of the previously shown card."""
+	if not prior_card_intro:
+		return
+	if not _BROAD_CALENDAR_FOLLOWUP_PATTERN.search(message or ""):
+		return
+	if _FULL_YEAR_REQUEST_PATTERN.search(message or ""):
+		return
+
+	explicit_season, explicit_year, explicit_block = _extract_block_context(message)
+	if explicit_season or explicit_year or explicit_block:
+		return
+
+	scope = (args_dict.get("scope") or "term").lower()
+	if scope == "full_year":
+		return
+
+	prior = _parse_prior_calendar_context(prior_card_intro)
+	if not prior.get("query_type"):
+		return
+
+	args_dict["query_type"] = prior["query_type"]
+	args_dict["scope"] = prior["scope"]
+	args_dict["year"] = prior["year"]
+	args_dict["season"] = prior["season"]
+
+	if prior["block_number"] is None:
+		args_dict.pop("block_number", None)
+	else:
+		args_dict["block_number"] = prior["block_number"]
+
+	args_dict.pop("specific_deadline", None)
+
+	logger.info(
+		"Conversational scope applied from prior card: query_type=%s scope=%s season=%s year=%s block=%s",
+		args_dict.get("query_type"),
+		args_dict.get("scope"),
+		args_dict.get("season"),
+		args_dict.get("year"),
+		args_dict.get("block_number"),
+	)
+
+
 def _relative_month_context(user_timezone: str, month_offset: int) -> tuple[int, str, int]:
 	"""Return (year, season, block) for a relative month offset."""
 	try:
@@ -348,6 +583,10 @@ def _apply_next_block_default(
 	# If the user explicitly said a season, year, or block, respect it.
 	if explicit_season or explicit_year or explicit_block:
 		return
+	# If the args were already resolved deterministically (e.g. conversational
+	# scoping or relative-time override), do not clobber them with "next block".
+	if args_dict.get("season") or args_dict.get("year") or args_dict.get("block_number"):
+		return
 	# If scope is full_year, don't override — they want everything.
 	scope = (args_dict.get("scope") or "term").lower()
 	if scope == "full_year":
@@ -401,6 +640,21 @@ async def detect_calendar_intent_via_llm(
 				original, user_timezone, chat_history,
 			)
 		logger.info("Calendar router: retry detected but no original question found in history")
+
+	invalid_term_number = _extract_any_term_number(message)
+	if invalid_term_number is not None and invalid_term_number > 6:
+		logger.info(
+			"Calendar router: invalid term/block requested (%s) — returning plain-text clarification",
+			invalid_term_number,
+		)
+		return None, _invalid_term_number_response(invalid_term_number)
+
+	default_overview_args = _build_default_overview_args(message, user_timezone)
+	if default_overview_args is not None:
+		logger.info(
+			"Calendar router: defaulting broad overview request to full current-year calendar"
+		)
+		return default_overview_args, None
 
 	tool_def = get_calendar_tool_definition()
 
@@ -484,9 +738,50 @@ async def detect_calendar_intent_via_llm(
 			# Deterministic override: resolve relative time expressions
 			_apply_relative_time_overrides(args_dict, message, user_timezone)
 
+			# Deterministic override: broad follow-ups inherit the subject of the
+			# prior card before any next-block default is applied.
+			_apply_conversational_scope(args_dict, message, prior_card_intro)
+
+			# Deterministic override: if the user named a block/season but omitted
+			# the year, default to the current academic year.
+			_apply_missing_year_default(args_dict, message, user_timezone)
+
 			# Deterministic override: if the user didn't specify a season/block
 			# explicitly, force the NEXT block so the nearest future dates appear.
 			_apply_next_block_default(args_dict, message, user_timezone)
+
+			# Deterministic override: if the user explicitly named a season
+			# (e.g., "Winter 2025") but the LLM returned scope=full_year,
+			# force scope=term so it routes to semester extraction (2-block card).
+			# Only keep full_year if the user actually asked for "full year" /
+			# "all blocks".
+			explicit_season, explicit_year, explicit_block = _extract_block_context(message)
+			if (
+				explicit_season
+				and (args_dict.get("scope") or "term").lower() == "full_year"
+				and not _FULL_YEAR_REQUEST_PATTERN.search(message or "")
+			):
+				logger.info(
+					"Calendar router: user named season '%s' but LLM returned "
+					"scope=full_year — forcing scope=term for semester extraction",
+					explicit_season,
+				)
+				args_dict["scope"] = "term"
+				args_dict.setdefault("season", explicit_season)
+				args_dict["query_type"] = "semester"
+
+			# Re-extract for the policy check below (already computed above).
+			if (
+				_is_policy_only_question(message)
+				and not explicit_season
+				and not explicit_year
+				and not explicit_block
+				and not _FULL_YEAR_REQUEST_PATTERN.search(message or "")
+			):
+				logger.info(
+					"Calendar router: policy/explanation question without explicit scope — deferring to RAG"
+				)
+				return None, None
 
 			# Follow-up suppression: if a calendar card was already shown
 			# and the new args match it, skip the calendar pipeline so RAG
@@ -510,7 +805,8 @@ async def detect_calendar_intent_via_llm(
 	# LLM did not call the tool: either not calendar or wants clarification
 	text_response = getattr(ai_message, "content", "") or ""
 	if text_response.strip():
-		logger.info(f"Calendar router clarification: {text_response[:100]}")
-		return None, text_response.strip()
+		normalized = _normalize_clarification_text(text_response.strip())
+		logger.info(f"Calendar router clarification: {normalized[:100]}")
+		return None, normalized
 
 	return None, None
