@@ -57,8 +57,8 @@ CALENDAR_CACHE_MAX_SIZE: int = 64
 
 # ── Typewriter Effect ────────────────────────────────────────────────────
 
-# Delay (in seconds) between each word-sized text chunk in the calendar
-# intro, post-card, and supplemental text streams.  A higher value gives
-# a more pronounced "typewriter" feel.  0.04 ≈ 25 words/sec — noticeably
-# slow without feeling sluggish.
-TYPEWRITER_CHUNK_DELAY: float = 0.04
+# Delay (in seconds) between each *character* in the calendar intro,
+# post-card, and supplemental text streams.  Characters are streamed
+# one-by-one for a visible letter-by-letter typewriter feel.
+# 0.018 ≈ ~55 chars/sec — a 120-char intro takes ~2.2s to type out.
+TYPEWRITER_CHUNK_DELAY: float = 0.018

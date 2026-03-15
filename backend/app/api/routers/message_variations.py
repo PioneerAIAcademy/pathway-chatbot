@@ -73,6 +73,19 @@ TEXT_FORMAT_MESSAGES = [
     "Converting to text...",
 ]
 
+# ── Calendar pipeline stage messages (multi-step status) ────────────
+CALENDAR_EXTRACTION_MESSAGES = [
+    "Extracting dates and deadlines...",
+    "Analyzing calendar data...",
+    "Parsing calendar entries...",
+]
+
+CALENDAR_BUILDING_MESSAGES = [
+    "Preparing calendar card...",
+    "Building calendar view...",
+    "Assembling calendar display...",
+]
+
 
 def get_retrieval_start_message() -> str:
     """Returns a random retrieval start message."""
@@ -117,3 +130,13 @@ def get_pushback_message() -> str:
 def get_text_format_message() -> str:
     """Returns a random text format conversion message."""
     return random.choice(TEXT_FORMAT_MESSAGES)
+
+
+def get_calendar_extraction_message() -> str:
+    """Returns a random calendar extraction message."""
+    return random.choice(CALENDAR_EXTRACTION_MESSAGES)
+
+
+def get_calendar_building_message() -> str:
+    """Returns a random calendar building message."""
+    return random.choice(CALENDAR_BUILDING_MESSAGES)

@@ -915,9 +915,18 @@ async def run_calendar_pipeline(
     user_language: Optional[str] = None,
     chat_history: list | None = None,
     skip_cache: bool = False,
+    progress_queue: Optional[asyncio.Queue] = None,
 ) -> tuple[Optional[dict], dict[str, Any]]:
     """Run calendar retrieval+extraction+card build, returning card and metadata."""
     metadata: dict[str, Any] = {}
+
+    async def _report(stage: str) -> None:
+        """Push a stage name onto the progress queue (non-blocking)."""
+        if progress_queue is not None:
+            try:
+                progress_queue.put_nowait(stage)
+            except asyncio.QueueFull:
+                pass
 
     if calendar_args is None:
         logger.warning("Calendar pipeline: calendar_args is None, skipping")
@@ -962,6 +971,7 @@ async def run_calendar_pipeline(
             return None, metadata
 
         logger.info("Calendar pipeline: creating retriever...")
+        await _report("retrieval")
         scope = (getattr(calendar_args, "scope", "term") or "term").lower()
         is_graduation = calendar_args.query_type.value == "graduation"
         if scope == "full_year":
@@ -1105,6 +1115,7 @@ async def run_calendar_pipeline(
                     return None, metadata
 
         logger.info("Calendar pipeline: extracting structured data...")
+        await _report("extraction")
         if scope == "full_year":
             extracted = await extract_full_year_by_semester(nodes, calendar_args)
         elif is_semester_term:
@@ -1176,6 +1187,7 @@ async def run_calendar_pipeline(
         )
 
         today: date = _get_today(calendar_args.timezone)
+        await _report("building")
         card = build_calendar_card(extracted, calendar_args, today)
         if card is None:
             logger.warning(

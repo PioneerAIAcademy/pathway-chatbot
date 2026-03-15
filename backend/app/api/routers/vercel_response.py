@@ -2,7 +2,6 @@ import asyncio
 import inspect
 import json
 import logging
-import re
 from collections.abc import Awaitable, Callable
 from typing import Any, Optional
 
@@ -13,6 +12,8 @@ from llama_index.core.chat_engine.types import StreamingAgentChatResponse
 
 from app.api.routers.events import EventCallbackHandler
 from app.api.routers.message_variations import (
+    get_calendar_building_message,
+    get_calendar_extraction_message,
     get_calendar_retrieval_message,
     get_graduation_retrieval_message,
     get_pushback_message,
@@ -60,12 +61,25 @@ class VercelStreamResponse(StreamingResponse):
 
     @classmethod
     def _iter_text_chunks(cls, text: str):
-        """Yield small text chunks to preserve typewriter-like rendering."""
+        """Yield individual characters for letter-by-letter typewriter rendering.
+
+        Newline sequences are yielded as a single chunk so paragraph breaks
+        appear instantly rather than introducing extra delays.
+        """
         if not text:
             return
-        for chunk in re.findall(r"\n+|\S+\s*", text):
-            if chunk:
-                yield chunk
+        i = 0
+        while i < len(text):
+            if text[i] == "\n":
+                # Gather consecutive newlines into one chunk
+                j = i
+                while j < len(text) and text[j] == "\n":
+                    j += 1
+                yield text[i:j]
+                i = j
+            else:
+                yield text[i]
+                i += 1
 
     def __init__(
         self,
@@ -87,6 +101,7 @@ class VercelStreamResponse(StreamingResponse):
             Callable[[], Awaitable[StreamingAgentChatResponse]]
         ] = None,
         calendar_query_type: Optional[str] = None,
+        calendar_progress_queue: Optional[asyncio.Queue] = None,
     ):
         content = VercelStreamResponse.content_generator(
             request,
@@ -103,8 +118,13 @@ class VercelStreamResponse(StreamingResponse):
             supplemental_text_pipeline,
             rag_fallback,
             calendar_query_type,
+            calendar_progress_queue,
         )
         super().__init__(content=content, media_type="text/plain")
+        # Prevent proxy / browser buffering so each character-level chunk
+        # reaches the client immediately for a visible typewriter effect.
+        self.headers["Cache-Control"] = "no-cache"
+        self.headers["X-Accel-Buffering"] = "no"
 
     @classmethod
     async def content_generator(
@@ -127,6 +147,7 @@ class VercelStreamResponse(StreamingResponse):
             Callable[[], Awaitable[StreamingAgentChatResponse]]
         ] = None,
         calendar_query_type: Optional[str] = None,
+        calendar_progress_queue: Optional[asyncio.Queue] = None,
     ):
         final_response = ""
         resolved_response: StreamingAgentChatResponse | None = None
@@ -294,6 +315,13 @@ class VercelStreamResponse(StreamingResponse):
                 # Resolve calendar data FIRST to avoid optimistic intro/skeleton
                 # when requested data does not exist (e.g., unsupported year).
                 if calendar_task is not None:
+                    # Map pipeline stage names to user-facing status messages.
+                    _STAGE_MSG_MAP = {
+                        "retrieval": get_calendar_retrieval_message,
+                        "extraction": get_calendar_extraction_message,
+                        "building": get_calendar_building_message,
+                    }
+
                     try:
                         logger.info("Calendar-only path: awaiting pipeline before emitting UI...")
                         loop = asyncio.get_running_loop()
@@ -310,6 +338,23 @@ class VercelStreamResponse(StreamingResponse):
                                 )
                                 break
                             except asyncio.TimeoutError:
+                                # Poll progress queue for stage updates while
+                                # the pipeline is still running.
+                                if calendar_progress_queue is not None:
+                                    while not calendar_progress_queue.empty():
+                                        try:
+                                            stage = calendar_progress_queue.get_nowait()
+                                            msg_fn = _STAGE_MSG_MAP.get(stage)
+                                            if msg_fn is not None:
+                                                yield cls.convert_data(
+                                                    {
+                                                        "type": "events",
+                                                        "data": {"title": msg_fn()},
+                                                        "trace_id": trace_id,
+                                                    }
+                                                )
+                                        except asyncio.QueueEmpty:
+                                            break
                                 # Keep the stream active so frontend "thinking"
                                 # state does not appear to freeze while extraction
                                 # is still running.

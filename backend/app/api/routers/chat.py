@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import hashlib
 import time
@@ -168,6 +169,7 @@ async def chat(
     security_details = {}
     chat_engine = None
     streaming_response_returned = False
+    request_started_at = time.monotonic()
 
     try:
         last_message_content = data.get_last_message_content()
@@ -415,6 +417,10 @@ async def chat(
 
         # Build the calendar pipeline that runs concurrently with the chat stream.
         # Intent detection is already done; this only does retrieval + extraction.
+        _calendar_progress_queue: Optional[asyncio.Queue] = None
+        if calendar_args is not None:
+            _calendar_progress_queue = asyncio.Queue(maxsize=8)
+
         async def _calendar_pipeline():
             """Runs concurrently with the main RAG stream."""
             nonlocal calendar_metadata
@@ -425,6 +431,7 @@ async def chat(
                 user_language=user_language,
                 chat_history=messages,
                 skip_cache=calendar_skip_cache,
+                progress_queue=_calendar_progress_queue,
             )
             if pipeline_metadata:
                 calendar_metadata.update(pipeline_metadata)
@@ -512,6 +519,9 @@ async def chat(
         async def _on_stream_end(final_response: str) -> None:
             # Update trace output after streaming finishes (or client disconnects).
             try:
+                stream_end_time = time.monotonic()
+                total_duration_ms = round((stream_end_time - request_started_at) * 1000)
+
                 final_tags = [
                     tag
                     for tag in success_tags
@@ -531,6 +541,11 @@ async def chat(
                         final_tags.append("calendar:error")
                 else:
                     final_tags.append("source:rag")
+
+                # Latency tracking: total request-to-stream-end duration
+                clean_metadata["latency"] = {
+                    "total_duration_ms": total_duration_ms,
+                }
 
                 langfuse.trace(id=trace_id).update(
                     output=final_response,
@@ -675,6 +690,7 @@ async def chat(
             supplemental_text_pipeline=_calendar_secondary_text_pipeline,
             rag_fallback=_rag_fallback_for_calendar,
             calendar_query_type=_cal_query_type,
+            calendar_progress_queue=_calendar_progress_queue,
         )
         # return VercelStreamResponse(request, event_handler, response, data, tokens)
     except Exception as e:
