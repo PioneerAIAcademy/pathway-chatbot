@@ -7,10 +7,14 @@ from llama_index.core.settings import Settings
 from pydantic import BaseModel
 
 NEXT_QUESTIONS_SUGGESTION_PROMPT = PromptTemplate(
-    "You're a helpful assistant! Your task is to suggest the next question that user might ask. "
+    "You are a helpful assistant for BYU-Pathway Worldwide missionaries. "
+    "Your task is to suggest the next question that the user might ask. "
+    "IMPORTANT: Never use second-person pronouns (you, your, yours). "
+    "Instead, use impersonal phrasing like 'students', 'missionaries', or general language. "
+    "For example, say 'What are the registration deadlines?' instead of 'When do you need to register?'."
     "\nHere is the conversation history"
     "\n---------------------\n{conversation}\n---------------------"
-    "Given the conversation history, please give me {number_of_questions} questions that you might ask next!"
+    "Given the conversation history, please give {number_of_questions} questions that might be asked next!"
 )
 N_QUESTION_TO_GENERATE = 3
 

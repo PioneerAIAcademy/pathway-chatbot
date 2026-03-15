@@ -53,11 +53,8 @@ chat_router = r = APIRouter()
 
 logger = logging.getLogger("uvicorn")
 
-_TEXT_FORMAT_REQUEST_PATTERN = re.compile(
-    r"\b(?:text\s+format|list(?:\s+these)?\s+dates(?:\s+in\s+text\s+format)?|"
-    r"summar(?:y|ize).*(?:dates|deadlines).*(?:text))\b",
-    re.IGNORECASE,
-)
+# Text-format detection is now LLM-based (see _is_text_format_request).
+# The old regex pattern has been removed to support 100+ languages.
 
 
 def _is_calendar_secondary_text_enabled() -> bool:
@@ -83,15 +80,46 @@ class _StaticResponse:
         yield self.response
 
 
-def _is_text_format_request(message: str) -> bool:
-    return bool(_TEXT_FORMAT_REQUEST_PATTERN.search(message or ""))
+async def _is_text_format_request(message: str) -> bool:
+    """Detect if the user is asking for calendar dates in plain text format.
+
+    Uses an LLM call to support any language (100+), not regex.
+    Examples: "text format", "list the dates as text", "formato de texto",
+    "テキスト形式で表示して", "I don't want the card, just text".
+    """
+    if not message or len(message.strip()) < 3:
+        return False
+
+    prompt = (
+        "Does this user message request calendar dates in plain text format "
+        "(as opposed to a visual card/widget)? This includes requests like "
+        "'text format', 'list the dates', 'show as text', 'just text please', "
+        "'I don't want the card', 'list these dates in text format', "
+        "'summarize in text'. The message may be in ANY language.\n\n"
+        f"Message: \"{message}\"\n\n"
+        "Reply with exactly one word: YES or NO."
+    )
+
+    try:
+        from llama_index.core.settings import Settings as LISettings
+        response = await LISettings.llm.acomplete(prompt)
+        answer = (response.text or "").strip().upper()
+        is_text = answer.startswith("YES")
+        logger.info(
+            "Text-format detection: message=%r → %s",
+            message[:80], "TEXT_FORMAT" if is_text else "not text format",
+        )
+        return is_text
+    except Exception as e:
+        logger.error("Text-format detection LLM call failed: %s", e)
+        return False
 
 
-def _resolve_text_format_followup_args(
+async def _resolve_text_format_followup_args(
     message: str,
     chat_history: List[Any],
 ) -> Optional[CalendarToolArgs]:
-    if not _is_text_format_request(message):
+    if not await _is_text_format_request(message):
         return None
 
     prior_intro = _has_recent_calendar_response(chat_history)
@@ -128,7 +156,7 @@ def _log_exception_trace():
 
 # streaming endpoint - delete if not needed
 @r.post("")
-@limiter.limit("10/minute")
+@limiter.limit("300/minute")
 @observe(as_type="generation")
 async def chat(
     request: Request,
@@ -332,6 +360,7 @@ async def chat(
         calendar_args = None
         calendar_clarification = None
         calendar_text_followup = False
+        calendar_skip_cache = False
 
         # If the user clicked "Try again" on a failed calendar card, the
         # frontend sends a canned retry message.  Resolve the original
@@ -348,7 +377,7 @@ async def chat(
                 last_message_content = original_q
 
         try:
-            calendar_args, calendar_clarification = (
+            calendar_args, calendar_clarification, calendar_skip_cache = (
                 await detect_calendar_intent_via_llm(
                     last_message_content,
                     user_timezone,
@@ -359,7 +388,7 @@ async def chat(
             logger.error(f"Calendar intent detection failed: {e}")
 
         if calendar_args is None and calendar_clarification is None:
-            text_format_args = _resolve_text_format_followup_args(
+            text_format_args = await _resolve_text_format_followup_args(
                 last_message_content,
                 messages,
             )
@@ -395,6 +424,7 @@ async def chat(
                 user_query=last_message_content,
                 user_language=user_language,
                 chat_history=messages,
+                skip_cache=calendar_skip_cache,
             )
             if pipeline_metadata:
                 calendar_metadata.update(pipeline_metadata)
@@ -621,6 +651,15 @@ async def chat(
             return await engine.astream_chat(last_message_content, messages)
 
         streaming_response_returned = True
+
+        # Determine the calendar query type for status message selection
+        _cal_query_type: Optional[str] = None
+        if calendar_args is not None:
+            if calendar_skip_cache:
+                _cal_query_type = "pushback"
+            else:
+                _cal_query_type = calendar_args.query_type.value
+
         return VercelStreamResponse(
             request,
             event_handler,
@@ -635,6 +674,7 @@ async def chat(
             calendar_intro=calendar_intro,
             supplemental_text_pipeline=_calendar_secondary_text_pipeline,
             rag_fallback=_rag_fallback_for_calendar,
+            calendar_query_type=_cal_query_type,
         )
         # return VercelStreamResponse(request, event_handler, response, data, tokens)
     except Exception as e:

@@ -53,3 +53,12 @@ CALENDAR_CACHE_TTL: float = 3600.0
 
 # Maximum number of distinct query keys held in the cache at once.
 CALENDAR_CACHE_MAX_SIZE: int = 64
+
+
+# ── Typewriter Effect ────────────────────────────────────────────────────
+
+# Delay (in seconds) between each word-sized text chunk in the calendar
+# intro, post-card, and supplemental text streams.  A higher value gives
+# a more pronounced "typewriter" feel.  0.04 ≈ 25 words/sec — noticeably
+# slow without feeling sluggish.
+TYPEWRITER_CHUNK_DELAY: float = 0.04

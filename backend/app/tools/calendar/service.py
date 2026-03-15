@@ -770,8 +770,8 @@ async def build_secondary_calendar_text(
             "confidence": confidence,
             "reason": reason,
             "text": (
-                "I can walk you through the calendar deadlines here. "
-                "Do you also want me to answer the non-calendar part separately?"
+                "Here is a walkthrough of the calendar deadlines. "
+                "Should the non-calendar part be answered separately as well?"
             ),
         }
 
@@ -914,6 +914,7 @@ async def run_calendar_pipeline(
     user_query: Optional[str] = None,
     user_language: Optional[str] = None,
     chat_history: list | None = None,
+    skip_cache: bool = False,
 ) -> tuple[Optional[dict], dict[str, Any]]:
     """Run calendar retrieval+extraction+card build, returning card and metadata."""
     metadata: dict[str, Any] = {}
@@ -925,7 +926,11 @@ async def run_calendar_pipeline(
 
     try:
         # Phase 3: check cache before doing any work
-        cached = calendar_cache.get(calendar_args)
+        if skip_cache:
+            logger.info("Calendar pipeline: cache bypassed (pushback/re-evaluation)")
+            cached = None
+        else:
+            cached = calendar_cache.get(calendar_args)
         if cached is not None:
             card, cached_meta = cached
             card = dict(card)  # shallow copy so we don't mutate the cached entry
@@ -958,8 +963,14 @@ async def run_calendar_pipeline(
 
         logger.info("Calendar pipeline: creating retriever...")
         scope = (getattr(calendar_args, "scope", "term") or "term").lower()
+        is_graduation = calendar_args.query_type.value == "graduation"
         if scope == "full_year":
             retriever = shared_index.as_retriever(similarity_top_k=8, sparse_top_k=30)
+        elif is_graduation:
+            # Graduation nodes: the top few matches are often footnote-only
+            # text; the actual date tables sit at positions 5-8 in Pinecone.
+            # Use a higher top_k to ensure we retrieve the table nodes.
+            retriever = shared_index.as_retriever(similarity_top_k=8, sparse_top_k=20)
         else:
             retriever = shared_index.as_retriever(similarity_top_k=3, sparse_top_k=15)
 

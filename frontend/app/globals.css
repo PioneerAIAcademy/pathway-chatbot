@@ -232,3 +232,14 @@
     hyphens: auto;
   }
 }
+
+/* Date chip responsive sizing — desktop 15px, mobile 12.5px */
+.date-chip {
+  font-size: 15px;
+}
+@media (max-width: 480px) {
+  .date-chip {
+    font-size: 12.5px;
+    padding: 1px 4.5px;
+  }
+}

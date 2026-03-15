@@ -150,8 +150,10 @@ export default function ChatInput(
             }}
             onKeyDown={(e) => {
               // Submit on Enter, new line on Shift+Enter
+              // Disable Enter while streaming — user must click Stop button
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
+                if (props.isLoading) return;
                 const form = e.currentTarget.form;
                 if (form) {
                   form.requestSubmit();

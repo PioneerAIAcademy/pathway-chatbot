@@ -468,6 +468,74 @@ def _build_default_overview_args(
 	)
 
 
+# Calendar-intent keywords that indicate the user is asking about dates/deadlines.
+_CALENDAR_KEYWORD_PATTERN = re.compile(
+	r"\b(?:when|start|end|begin|open|close|deadline|date|calendar|schedule|"
+	r"show|display|pull\s+up|registration|payment|tuition|drop|withdraw|"
+	r"refund|grades|application|add\s+course|late\s+fee|commencement|"
+	r"graduation|semester|block|term)\b",
+	re.IGNORECASE,
+)
+
+
+def _build_explicit_calendar_args(
+	message: str,
+	user_timezone: str,
+) -> Optional[CalendarToolArgs]:
+	"""Short-circuit the LLM when the user provides explicit block/term + year.
+
+	This handles cases like "when does term 2 2026 start?" where the LLM
+	incorrectly asks for clarification despite all information being present.
+	Also handles season + year ("Show me Winter 2025") for semester queries.
+	"""
+	# Only trigger if the message looks like a calendar question
+	if not _CALENDAR_KEYWORD_PATTERN.search(message or ""):
+		return None
+
+	# Skip policy-only questions that happen to mention a block/year
+	if _is_policy_only_question(message):
+		return None
+
+	explicit_season, explicit_year, explicit_block = _extract_block_context(message)
+
+	# Need at least a block or season, plus a year
+	if not explicit_year:
+		return None
+	if not explicit_block and not explicit_season:
+		return None
+
+	# Check for a specific deadline keyword
+	specific_deadline = normalize_deadline_term(message)
+
+	# Determine the season from the block number if not explicitly stated
+	block_to_season = {1: "winter", 2: "winter", 3: "spring", 4: "spring", 5: "fall", 6: "fall"}
+
+	if explicit_block and not explicit_season:
+		explicit_season = block_to_season.get(explicit_block)
+
+	# Case 1: Explicit block + year → single block query
+	if explicit_block:
+		return CalendarToolArgs(
+			query_type="deadline" if specific_deadline else "block",
+			season=explicit_season,
+			year=explicit_year,
+			block_number=explicit_block,
+			specific_deadline=specific_deadline,
+			scope="term",
+			timezone=user_timezone,
+		)
+
+	# Case 2: Explicit season + year, no block → semester query (2-block card)
+	if explicit_season:
+		return CalendarToolArgs(
+			query_type="semester",
+			season=explicit_season,
+			year=explicit_year,
+			scope="term",
+			timezone=user_timezone,
+		)
+
+
 def _apply_missing_year_default(
 	args_dict: dict,
 	message: str,
@@ -613,19 +681,58 @@ def _apply_next_block_default(
 	)
 
 
+async def _detect_pushback_via_llm(message: str) -> bool:
+	"""Use a lightweight LLM call to detect pushback/doubt in any language.
+
+	Pushback examples: "Are you sure?", "Think again", "That doesn't look
+	right", "Estas seguro?", "Je ne suis pas sûr que ce soit correct", etc.
+
+	Returns True if the message expresses doubt, correction, or asks the
+	system to re-evaluate a previous answer.
+	"""
+	if not message or len(message.strip()) < 3:
+		return False
+
+	prompt = (
+		"Classify the following user message. Does the user express doubt, "
+		"disagreement, or ask the system to re-check or re-evaluate a "
+		"previous answer? Examples: 'Are you sure?', 'Think again', "
+		"'That doesn't look right', 'I don't think so', 'Check again', "
+		"'Really?', 'No way', 'hmm are you certain?'\n\n"
+		"The message may be in ANY language.\n\n"
+		f"Message: \"{message}\"\n\n"
+		"Reply with exactly one word: YES or NO."
+	)
+
+	try:
+		response = await Settings.llm.acomplete(prompt)
+		answer = (response.text or "").strip().upper()
+		is_pushback = answer.startswith("YES")
+		logger.info(
+			"Calendar pushback detection: message=%r → %s",
+			message[:80], "PUSHBACK" if is_pushback else "not pushback",
+		)
+		return is_pushback
+	except Exception as e:
+		logger.error("Calendar pushback detection failed: %s", e)
+		return False
+
+
 async def detect_calendar_intent_via_llm(
 	message: str,
 	user_timezone: str = "UTC",
 	chat_history: Optional[List[ChatMessage]] = None,
-) -> tuple[Optional[CalendarToolArgs], Optional[str]]:
+) -> tuple[Optional[CalendarToolArgs], Optional[str], bool]:
 	"""
 	Ask the LLM if this message is a calendar question.
 
 	Returns:
-		(args, clarification_text):
+		(args, clarification_text, skip_cache):
 		- args is set if the LLM called the calendar tool
 		- clarification_text is set if the LLM wants to ask a follow-up
 		- both None if the message is clearly not calendar-related
+		- skip_cache is True when user expressed pushback and we should
+		  bypass the calendar cache for re-evaluation
 	"""
 	# Retry detection: frontend sends a canned retry message.
 	# Find the original question from history and re-route against that.
@@ -641,20 +748,64 @@ async def detect_calendar_intent_via_llm(
 			)
 		logger.info("Calendar router: retry detected but no original question found in history")
 
+	# Pushback detection: if a calendar card was already shown and the user
+	# expresses doubt ("Are you sure?", "Think again", etc. in any language),
+	# re-run the pipeline with the prior card's args and skip the cache.
+	prior_card_intro = _has_recent_calendar_response(chat_history)
+	if prior_card_intro:
+		is_pushback = await _detect_pushback_via_llm(message)
+		if is_pushback:
+			prior_ctx = _parse_prior_calendar_context(prior_card_intro)
+			qt = prior_ctx.get("query_type")
+			if qt:
+				logger.info(
+					"Calendar router: pushback detected with prior card — "
+					"re-running pipeline with skip_cache=True "
+					"(query_type=%s, block=%s, season=%s, year=%s)",
+					qt, prior_ctx.get("block_number"),
+					prior_ctx.get("season"), prior_ctx.get("year"),
+				)
+				args_dict: dict = {
+					"query_type": qt,
+					"scope": prior_ctx.get("scope") or "term",
+					"timezone": user_timezone,
+				}
+				if prior_ctx.get("season"):
+					args_dict["season"] = prior_ctx["season"]
+				if prior_ctx.get("year"):
+					args_dict["year"] = prior_ctx["year"]
+				if prior_ctx.get("block_number"):
+					args_dict["block_number"] = prior_ctx["block_number"]
+				return CalendarToolArgs(**args_dict), None, True
+
 	invalid_term_number = _extract_any_term_number(message)
 	if invalid_term_number is not None and invalid_term_number > 6:
 		logger.info(
 			"Calendar router: invalid term/block requested (%s) — returning plain-text clarification",
 			invalid_term_number,
 		)
-		return None, _invalid_term_number_response(invalid_term_number)
+		return None, _invalid_term_number_response(invalid_term_number), False
+
+	# Deterministic short-circuit: when explicit block/term + year (or season + year)
+	# are present, bypass the LLM entirely to avoid spurious clarifications.
+	explicit_args = _build_explicit_calendar_args(message, user_timezone)
+	if explicit_args is not None:
+		logger.info(
+			"Calendar router: explicit args detected — bypassing LLM "
+			"(block=%s, season=%s, year=%s, deadline=%s)",
+			explicit_args.block_number,
+			explicit_args.season,
+			explicit_args.year,
+			explicit_args.specific_deadline,
+		)
+		return explicit_args, None, False
 
 	default_overview_args = _build_default_overview_args(message, user_timezone)
 	if default_overview_args is not None:
 		logger.info(
 			"Calendar router: defaulting broad overview request to full current-year calendar"
 		)
-		return default_overview_args, None
+		return default_overview_args, None, False
 
 	tool_def = get_calendar_tool_definition()
 
@@ -702,7 +853,7 @@ async def detect_calendar_intent_via_llm(
 		)
 	except Exception as e:
 		logger.error(f"Calendar router LLM call failed: {e}")
-		return None, None
+		return None, None, False
 
 	ai_message = response.message
 	tool_calls = getattr(ai_message, "additional_kwargs", {}).get("tool_calls", [])
@@ -781,7 +932,7 @@ async def detect_calendar_intent_via_llm(
 				logger.info(
 					"Calendar router: policy/explanation question without explicit scope — deferring to RAG"
 				)
-				return None, None
+				return None, None, False
 
 			# Follow-up suppression: if a calendar card was already shown
 			# and the new args match it, skip the calendar pipeline so RAG
@@ -793,20 +944,20 @@ async def detect_calendar_intent_via_llm(
 					"Calendar router: suppressing duplicate card — "
 					"same data already shown, deferring to RAG"
 				)
-				return None, None
+				return None, None, False
 
 			args_dict.setdefault("timezone", user_timezone)
 			args_dict.setdefault("scope", "term")
-			return CalendarToolArgs(**args_dict), None
+			return CalendarToolArgs(**args_dict), None, False
 		except Exception as e:
 			logger.error(f"Failed to parse calendar tool args: {e}")
-			return None, None
+			return None, None, False
 
 	# LLM did not call the tool: either not calendar or wants clarification
 	text_response = getattr(ai_message, "content", "") or ""
 	if text_response.strip():
 		normalized = _normalize_clarification_text(text_response.strip())
 		logger.info(f"Calendar router clarification: {normalized[:100]}")
-		return None, normalized
+		return None, normalized, False
 
-	return None, None
+	return None, None, False

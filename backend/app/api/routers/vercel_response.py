@@ -12,7 +12,13 @@ from fastapi.responses import StreamingResponse
 from llama_index.core.chat_engine.types import StreamingAgentChatResponse
 
 from app.api.routers.events import EventCallbackHandler
-from app.api.routers.message_variations import get_retrieval_start_message
+from app.api.routers.message_variations import (
+    get_calendar_retrieval_message,
+    get_graduation_retrieval_message,
+    get_pushback_message,
+    get_retrieval_start_message,
+    get_text_format_message,
+)
 from app.api.routers.models import ChatData, Message, SourceNodes
 from app.api.services.suggestion import NextQuestionSuggestion
 from app.tools.calendar.config import (
@@ -20,6 +26,7 @@ from app.tools.calendar.config import (
     CALENDAR_ONLY_TIMEOUT,
     CALENDAR_PIPELINE_TIMEOUT,
     MIN_TOKENS_BEFORE_CALENDAR,
+    TYPEWRITER_CHUNK_DELAY,
 )
 from app.utils.date_spans import extract_date_spans
 
@@ -79,6 +86,7 @@ class VercelStreamResponse(StreamingResponse):
         rag_fallback: Optional[
             Callable[[], Awaitable[StreamingAgentChatResponse]]
         ] = None,
+        calendar_query_type: Optional[str] = None,
     ):
         content = VercelStreamResponse.content_generator(
             request,
@@ -94,6 +102,7 @@ class VercelStreamResponse(StreamingResponse):
             calendar_intro,
             supplemental_text_pipeline,
             rag_fallback,
+            calendar_query_type,
         )
         super().__init__(content=content, media_type="text/plain")
 
@@ -117,6 +126,7 @@ class VercelStreamResponse(StreamingResponse):
         rag_fallback: Optional[
             Callable[[], Awaitable[StreamingAgentChatResponse]]
         ] = None,
+        calendar_query_type: Optional[str] = None,
     ):
         final_response = ""
         resolved_response: StreamingAgentChatResponse | None = None
@@ -260,10 +270,23 @@ class VercelStreamResponse(StreamingResponse):
             if calendar_intro is not None:
                 # ---- Calendar-only path (no RAG, no events) ----
                 supplemental_source_nodes: list[Any] = []
+
+                # Pick a status message that matches the calendar query type
+                if calendar_query_type == "pushback":
+                    _status_msg = get_pushback_message()
+                elif calendar_query_type == "text_format":
+                    _status_msg = get_text_format_message()
+                elif calendar_query_type == "graduation":
+                    _status_msg = get_graduation_retrieval_message()
+                elif calendar_query_type is not None:
+                    _status_msg = get_calendar_retrieval_message()
+                else:
+                    _status_msg = get_retrieval_start_message()
+
                 yield cls.convert_data(
                     {
                         "type": "events",
-                        "data": {"title": get_retrieval_start_message()},
+                        "data": {"title": _status_msg},
                         "trace_id": trace_id,
                     }
                 )
@@ -314,6 +337,7 @@ class VercelStreamResponse(StreamingResponse):
                             final_response = fallback_msg
                             for chunk in cls._iter_text_chunks(fallback_msg):
                                 yield cls.convert_text(chunk)
+                                await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
                             yield cls.convert_data(
                                 {
                                     "type": "calendar_error",
@@ -343,6 +367,7 @@ class VercelStreamResponse(StreamingResponse):
                             final_response = fallback_msg
                             for chunk in cls._iter_text_chunks(fallback_msg):
                                 yield cls.convert_text(chunk)
+                                await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
                             yield cls.convert_data(
                                 {
                                     "type": "calendar_error",
@@ -370,6 +395,7 @@ class VercelStreamResponse(StreamingResponse):
                         final_response = message
                         for chunk in cls._iter_text_chunks(message):
                             yield cls.convert_text(chunk)
+                            await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
                         yield cls.convert_data(
                             {
                                 "type": "calendar_error",
@@ -382,6 +408,7 @@ class VercelStreamResponse(StreamingResponse):
                             final_response = calendar_intro
                             for chunk in cls._iter_text_chunks(calendar_intro):
                                 yield cls.convert_text(chunk)
+                                await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
 
                         for patch in _build_calendar_patches(calendar_data, trace_id):
                             yield patch
@@ -395,7 +422,7 @@ class VercelStreamResponse(StreamingResponse):
                             )
                             for chunk in cls._iter_text_chunks(f"\n\n{post_card_text}"):
                                 yield cls.convert_text(chunk)
-                                await asyncio.sleep(0.02)
+                                await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
 
                         if supplemental_text_pipeline is not None:
                             try:
@@ -424,11 +451,13 @@ class VercelStreamResponse(StreamingResponse):
                                 )
                                 for chunk in cls._iter_text_chunks(f"\n\n{extra_text}"):
                                     yield cls.convert_text(chunk)
+                                    await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
                     elif calendar_data is None and not final_response:
                         fallback = "I couldn't find calendar data for that request."
                         final_response = fallback
                         for chunk in cls._iter_text_chunks(fallback):
                             yield cls.convert_text(chunk)
+                            await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
                         yield cls.convert_data(
                             {
                                 "type": "calendar_error",
@@ -440,6 +469,7 @@ class VercelStreamResponse(StreamingResponse):
                     final_response = calendar_intro
                     for chunk in cls._iter_text_chunks(calendar_intro):
                         yield cls.convert_text(chunk)
+                        await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
 
                 event_handler.is_done = True
 

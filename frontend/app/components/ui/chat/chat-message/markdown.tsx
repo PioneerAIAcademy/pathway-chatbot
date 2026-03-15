@@ -142,7 +142,7 @@ const DATE_PATTERN = new RegExp(
 );
 
 const DATE_CHIP_CLASSNAME =
-  "inline-block align-baseline border rounded-[5px]";
+  "date-chip inline-block align-baseline border rounded-[5px]";
 
 const DATE_CHIP_STYLE: CSSProperties = {
   background: "hsl(var(--chat-bg))",
@@ -154,7 +154,6 @@ const DATE_CHIP_STYLE: CSSProperties = {
   padding: "1.5px 6px",
   fontFamily:
     "'Söhne Mono', ui-monospace, 'SFMono-Regular', 'Cascadia Code', monospace",
-  fontSize: "15px",
   lineHeight: 1.2,
   letterSpacing: "0.01em",
   fontWeight: 800,

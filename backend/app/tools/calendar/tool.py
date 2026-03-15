@@ -501,6 +501,19 @@ async def extract_structured_data(
 			f"Each block MUST have its own 13 events with DIFFERENT dates. "
 			f"Block {blocks[0]} events occur BEFORE Block {blocks[1]} events."
 		)
+	elif args.query_type.value == "graduation":
+		system_content += (
+			"\nThis is a GRADUATION query. The event types are DIFFERENT from block deadlines. "
+			"Graduation event types include: "
+			"Graduation Survey Deadline (BYU-Idaho), Graduation Survey Deadline (Ensign College), "
+			"BYUPW Graduation Application Deadline (BYU-Idaho & Ensign College), "
+			"Commencement (BYU-Idaho), Commencement (Ensign College), Awarding Process Starts. "
+			"Graduation data is organized by semester (Winter, Spring, Fall). "
+			"Use the 'blocks' field to group events by SEMESTER (not by block). "
+			"Use block_label values: 'Winter', 'Spring', 'Fall'. "
+			"Extract ALL graduation events for all semesters present in the documents. "
+			"Each event MUST use a date explicitly present in the source documents."
+		)
 	elif args.block_number and scope != "full_year":
 		system_content += (
 			f"\nIMPORTANT: Extract dates ONLY for Block {args.block_number}. "
@@ -932,7 +945,14 @@ def build_calendar_card(
 		timeline_events = deduped_events
 
 	tabs = None
-	if args.query_type.value == "semester" and extracted.blocks:
+	scope = (getattr(args, "scope", "term") or "term")
+	scope_str = scope.value if hasattr(scope, "value") else str(scope)
+	should_build_tabs = (
+		(args.query_type.value == "semester" and extracted.blocks)
+		or (scope_str == "full_year" and extracted.blocks)
+		or (args.query_type.value == "graduation" and extracted.blocks)
+	)
+	if should_build_tabs:
 		tabs = []
 		for i, block_data in enumerate(extracted.blocks):
 			block_events = []
@@ -959,66 +979,71 @@ def build_calendar_card(
 			tabs.append({"label": block_data.block_label, "active": i == 0, "events": block_events})
 
 		# Normalize tab labels to "Block N" (strip season prefixes like "Winter Block 1")
-		for tab in tabs:
-			m = re.search(r"\d+", tab.get("label") or "")
-			if m:
-				tab["label"] = f"Block {m.group()}"
+		# For graduation queries, keep semester labels (Winter, Spring, Fall)
+		if args.query_type.value != "graduation":
+			for tab in tabs:
+				m = re.search(r"\d+", tab.get("label") or "")
+				if m:
+					tab["label"] = f"Block {m.group()}"
 
 		# Post-build validation: detect LLM duplication or empty tabs
-		has_overflow = any(len(t["events"]) > _MAX_EVENTS_PER_TAB for t in tabs)
-		has_empty = any(len(t["events"]) == 0 for t in tabs) and any(len(t["events"]) > 0 for t in tabs)
-		if has_overflow:
-			logger.warning(
-				"Tab overflow detected (LLM likely duplicated events) — "
-				"rebuilding all tabs from flat events"
-			)
-			# Rebuild ALL tabs from flat events using strict date assignment
-			seen_events: dict[int, list[dict]] = {b: [] for b in range(1, 7)}
-			for evt in extracted.events:
-				try:
-					evt_date = date.fromisoformat(evt.date)
-				except ValueError:
-					continue
-				block_num = _strict_block_from_date(evt_date, args.year)
-				status = _classify_date(evt_date, today)
-				countdown = _countdown_str(evt_date, today)
-				section = "Past" if status == "past" else "Today" if status == "today" else "Coming Up"
-				seen_events[block_num].append({
-					"date": evt.date,
-					"name": evt.name,
-					"status": status,
-					"countdown": countdown,
-					"description": evt.description or "",
-					"section": section,
-				})
-			tabs = []
-			for b in range(1, 7):
-				evts = sorted(seen_events[b], key=lambda e: e["date"])
-				tabs.append({"label": f"Block {b}", "active": b == 1, "events": evts})
-		elif has_empty:
-			# Fill only the empty tabs from flat events
-			for tab in tabs:
-				if len(tab["events"]) > 0:
-					continue
-				m = re.search(r"\d+", tab.get("label") or "")
-				block_num = int(m.group()) if m else None
-				if block_num:
-					tab["events"] = _build_block_events_from_flat(
-						extracted.events, block_num, args.year, today,
-					)
+		# Skip block-based validation for graduation (uses semester tabs, not block tabs)
+		if args.query_type.value != "graduation":
+			has_overflow = any(len(t["events"]) > _MAX_EVENTS_PER_TAB for t in tabs)
+			has_empty = any(len(t["events"]) == 0 for t in tabs) and any(len(t["events"]) > 0 for t in tabs)
+			if has_overflow:
+				logger.warning(
+					"Tab overflow detected (LLM likely duplicated events) — "
+					"rebuilding all tabs from flat events"
+				)
+				# Rebuild ALL tabs from flat events using strict date assignment
+				seen_events: dict[int, list[dict]] = {b: [] for b in range(1, 7)}
+				for evt in extracted.events:
+					try:
+						evt_date = date.fromisoformat(evt.date)
+					except ValueError:
+						continue
+					block_num = _strict_block_from_date(evt_date, args.year)
+					status = _classify_date(evt_date, today)
+					countdown = _countdown_str(evt_date, today)
+					section = "Past" if status == "past" else "Today" if status == "today" else "Coming Up"
+					seen_events[block_num].append({
+						"date": evt.date,
+						"name": evt.name,
+						"status": status,
+						"countdown": countdown,
+						"description": evt.description or "",
+						"section": section,
+					})
+				tabs = []
+				for b in range(1, 7):
+					evts = sorted(seen_events[b], key=lambda e: e["date"])
+					tabs.append({"label": f"Block {b}", "active": b == 1, "events": evts})
+			elif has_empty:
+				# Fill only the empty tabs from flat events
+				for tab in tabs:
+					if len(tab["events"]) > 0:
+						continue
+					m = re.search(r"\d+", tab.get("label") or "")
+					block_num = int(m.group()) if m else None
+					if block_num:
+						tab["events"] = _build_block_events_from_flat(
+							extracted.events, block_num, args.year, today,
+						)
 
 		# Ensure all expected blocks are present (fill missing from flat events)
-		scope = (getattr(args, "scope", "term") or "term").lower()
-		expected = _expected_blocks_for_scope(scope, args.season)
-		if expected:
-			tabs = _ensure_all_block_tabs(
-				tabs, extracted.events, expected, args.year, today,
-			)
+		# Skip for graduation (uses semester tabs, not block tabs)
+		if args.query_type.value != "graduation":
+			scope_lower = scope_str.lower()
+			expected = _expected_blocks_for_scope(scope_lower, args.season)
+			if expected:
+				tabs = _ensure_all_block_tabs(
+					tabs, extracted.events, expected, args.year, today,
+				)
 
 	normalized_title = extracted.title
 	normalized_subtitle = extracted.subtitle or ""
-	scope = (getattr(args, "scope", "term") or "term")
-	scope_val = scope.value if hasattr(scope, "value") else str(scope)
+	scope_val = scope_str.lower()
 
 	if scope_val == "full_year":
 		normalized_title = f"{args.year} Academic Calendar"
@@ -1067,6 +1092,24 @@ def build_calendar_card(
 				extracted.block_or_semester_end = end_event.date
 			except ValueError:
 				pass
+	elif args.query_type.value == "graduation":
+		normalized_title = f"{args.year} Graduation Dates"
+		# Compute subtitle from all events (flat or tabs)
+		all_dates: list[date] = []
+		for evt in events_source:
+			try:
+				all_dates.append(date.fromisoformat(evt.date))
+			except (ValueError, AttributeError):
+				pass
+		if tabs:
+			for tab in tabs:
+				for evt in tab.get("events", []):
+					try:
+						all_dates.append(date.fromisoformat(evt["date"]))
+					except (ValueError, KeyError):
+						pass
+		if all_dates:
+			normalized_subtitle = _format_range(min(all_dates), max(all_dates))
 
 	card = {
 		"type": args.query_type.value,
