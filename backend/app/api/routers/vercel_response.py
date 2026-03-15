@@ -498,18 +498,35 @@ class VercelStreamResponse(StreamingResponse):
                                     yield cls.convert_text(chunk)
                                     await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
                     elif calendar_data is None and not final_response:
-                        fallback = "I couldn't find calendar data for that request."
-                        final_response = fallback
-                        for chunk in cls._iter_text_chunks(fallback):
-                            yield cls.convert_text(chunk)
-                            await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
-                        yield cls.convert_data(
-                            {
-                                "type": "calendar_error",
-                                "data": {"reason": "no_data"},
-                                "trace_id": trace_id,
-                            }
-                        )
+                        # Pipeline returned no data — fall back to RAG so the
+                        # student still gets a useful answer.
+                        rag_used = False
+                        if rag_fallback is not None:
+                            try:
+                                logger.info("Calendar soft-fail: falling back to RAG")
+                                fallback_resp = await rag_fallback()
+                                async for token in fallback_resp.async_response_gen():
+                                    final_response += token
+                                    yield cls.convert_text(token)
+                                supplemental_source_nodes = list(
+                                    getattr(fallback_resp, "source_nodes", []) or []
+                                )
+                                rag_used = True
+                            except Exception as rag_err:
+                                logger.error("RAG fallback (soft-fail) also failed: %s", rag_err)
+                        if not rag_used:
+                            fallback = "I couldn't find calendar data for that request."
+                            final_response = fallback
+                            for chunk in cls._iter_text_chunks(fallback):
+                                yield cls.convert_text(chunk)
+                                await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
+                            yield cls.convert_data(
+                                {
+                                    "type": "calendar_error",
+                                    "data": {"reason": "no_data"},
+                                    "trace_id": trace_id,
+                                }
+                            )
                 else:
                     final_response = calendar_intro
                     for chunk in cls._iter_text_chunks(calendar_intro):

@@ -304,6 +304,18 @@ async def query_pinecone_for_calendar(args: CalendarToolArgs, retriever) -> list
 	scope = (getattr(args, "scope", "term") or "term").lower()
 	resolved_season = args.season or _season_for_block(args.block_number)
 
+	# Graduation queries need graduation-specific terms, not block/season
+	# noise — otherwise Pinecone returns block deadline nodes instead of
+	# the graduation date tables.
+	if args.query_type.value == "graduation":
+		query_parts = [
+			f"academic calendar {args.year} graduation commencement",
+			"awarding process convocation",
+		]
+		query_text = " ".join(query_parts)
+		logger.info(f"Calendar Pinecone query: {query_text}")
+		return await retriever.aretrieve(query_text)
+
 	if scope == "full_year":
 		query_parts.append(
 			f"full year {args.year} winter spring fall all blocks start end dates deadlines"
@@ -317,8 +329,6 @@ async def query_pinecone_for_calendar(args: CalendarToolArgs, retriever) -> list
 	if args.specific_deadline:
 		deadline_label = args.specific_deadline.replace("_", " ")
 		query_parts.append(f"{deadline_label} deadline")
-	if args.query_type.value == "graduation":
-		query_parts.append("graduation commencement")
 	if not year_included:
 		query_parts.append(str(args.year))
 

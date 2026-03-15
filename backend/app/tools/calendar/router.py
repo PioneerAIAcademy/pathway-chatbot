@@ -659,6 +659,17 @@ def _apply_next_block_default(
 	scope = (args_dict.get("scope") or "term").lower()
 	if scope == "full_year":
 		return
+	# Graduation queries are year-level, not block-level — only default
+	# the year, not the season/block.
+	qt = (args_dict.get("query_type") or "").lower()
+	if qt == "graduation":
+		try:
+			today = datetime.now(ZoneInfo(user_timezone)).date()
+		except Exception:
+			today = datetime.now(ZoneInfo("UTC")).date()
+		args_dict["year"] = today.year
+		logger.info("Next-block default (graduation): year=%d only", today.year)
+		return
 
 	try:
 		today = datetime.now(ZoneInfo(user_timezone)).date()
