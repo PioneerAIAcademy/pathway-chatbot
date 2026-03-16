@@ -36,7 +36,6 @@ from app.langfuse import langfuse
 from app.utils.geo_ip import get_geo_data
 from app.tools.calendar import (
     build_calendar_intro,
-    build_calendar_text_response,
     build_initial_calendar_metadata,
     detect_calendar_intent_via_llm,
     localize_calendar_intro,
@@ -46,9 +45,7 @@ from app.tools.calendar.router import (
     _find_original_calendar_question,
     _has_recent_calendar_response,
     _is_calendar_retry,
-    _parse_prior_calendar_context,
 )
-from app.tools.calendar.schema import CalendarToolArgs
 import os
 
 chat_router = r = APIRouter()
@@ -116,30 +113,6 @@ async def _is_text_format_request(message: str) -> bool:
         logger.error("Text-format detection LLM call failed: %s", e)
         return False
 
-
-async def _resolve_text_format_followup_args(
-    message: str,
-    chat_history: List[Any],
-) -> Optional[CalendarToolArgs]:
-    if not await _is_text_format_request(message):
-        return None
-
-    prior_intro = _has_recent_calendar_response(chat_history)
-    if not prior_intro:
-        return None
-
-    scoped = _parse_prior_calendar_context(prior_intro)
-    if not scoped.get("query_type"):
-        return None
-
-    args_payload = {
-        "query_type": scoped.get("query_type"),
-        "scope": scoped.get("scope") or "term",
-        "season": scoped.get("season"),
-        "year": scoped.get("year"),
-        "block_number": scoped.get("block_number"),
-    }
-    return CalendarToolArgs(**args_payload)
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -384,13 +357,28 @@ async def chat(
         user_timezone = request.headers.get("X-Timezone", "UTC")
         calendar_args = None
         calendar_clarification = None
-        calendar_text_followup = False
         calendar_skip_cache = False
+
+        # Text-format preference check BEFORE calendar intent detection.
+        # When the user asks for text format (e.g., "Yes, list the dates in
+        # text format") after seeing a calendar card, skip the entire calendar
+        # pipeline and let normal RAG handle it.  RAG has the conversation
+        # history (including the post-card explanation) so it can produce a
+        # natural plain-text answer.
+        _skip_calendar_for_text_format = False
+        if await _is_text_format_request(last_message_content):
+            prior_intro = _has_recent_calendar_response(messages)
+            if prior_intro:
+                _skip_calendar_for_text_format = True
+                logger.info(
+                    "Text-format preference detected after calendar card — "
+                    "skipping calendar pipeline, routing to RAG"
+                )
 
         # If the user clicked "Try again" on a failed calendar card, the
         # frontend sends a canned retry message.  Resolve the original
         # question so every downstream consumer uses real calendar context.
-        if _is_calendar_retry(last_message_content):
+        if not _skip_calendar_for_text_format and _is_calendar_retry(last_message_content):
             original_q = _find_original_calendar_question(
                 last_message_content, messages,
             )
@@ -401,33 +389,17 @@ async def chat(
                 )
                 last_message_content = original_q
 
-        try:
-            calendar_args, calendar_clarification, calendar_skip_cache = (
-                await detect_calendar_intent_via_llm(
-                    last_message_content,
-                    user_timezone,
-                    chat_history=messages,
+        if not _skip_calendar_for_text_format:
+            try:
+                calendar_args, calendar_clarification, calendar_skip_cache = (
+                    await detect_calendar_intent_via_llm(
+                        last_message_content,
+                        user_timezone,
+                        chat_history=messages,
+                    )
                 )
-            )
-        except Exception as e:
-            logger.error(f"Calendar intent detection failed: {e}")
-
-        if calendar_args is None and calendar_clarification is None:
-            text_format_args = await _resolve_text_format_followup_args(
-                last_message_content,
-                messages,
-            )
-            if text_format_args is not None:
-                calendar_args = text_format_args
-                calendar_text_followup = True
-                logger.info(
-                    "Calendar text-format follow-up resolved from prior card: "
-                    "query_type=%s block=%s season=%s year=%s",
-                    calendar_args.query_type.value,
-                    calendar_args.block_number,
-                    calendar_args.season,
-                    calendar_args.year,
-                )
+            except Exception as e:
+                logger.error(f"Calendar intent detection failed: {e}")
 
         if calendar_args is not None:
             _is_calendar_response = True
@@ -436,8 +408,6 @@ async def chat(
                 f"block={calendar_args.block_number}, season={calendar_args.season}"
             )
             calendar_metadata.update(build_initial_calendar_metadata(calendar_args))
-            if calendar_text_followup:
-                calendar_metadata["response_mode"] = "text_format"
 
         # Build the calendar pipeline that runs concurrently with the chat stream.
         # Intent detection is already done; this only does retrieval + extraction.
@@ -602,43 +572,6 @@ async def chat(
                 request,
                 event_handler,
                 _StaticResponse(calendar_clarification),
-                data,
-                trace_id=trace_id,
-                user_language=user_language,
-                skip_suggestions=True,
-                on_stream_end=_on_stream_end,
-                emit_initial_status=False,
-            )
-
-        if calendar_text_followup and calendar_args is not None:
-            card, pipeline_metadata = await run_calendar_pipeline(
-                calendar_args,
-                shared_index,
-                user_query=last_message_content,
-                user_language=user_language,
-                chat_history=messages,
-            )
-            if pipeline_metadata:
-                calendar_metadata.update(pipeline_metadata)
-
-            if card is not None:
-                text_only_response = build_calendar_text_response(card)
-            elif pipeline_metadata.get("pipeline_status") == "unsupported_year":
-                requested_year = pipeline_metadata.get("requested_year")
-                text_only_response = (
-                    f"I don't have verified academic calendar dates for {requested_year} yet. "
-                    "Please refer to the Academic Calendar source for confirmed dates."
-                )
-            else:
-                text_only_response = (
-                    "I couldn't find the calendar dates to list in text format right now."
-                )
-
-            streaming_response_returned = True
-            return VercelStreamResponse(
-                request,
-                event_handler,
-                _StaticResponse(text_only_response),
                 data,
                 trace_id=trace_id,
                 user_language=user_language,

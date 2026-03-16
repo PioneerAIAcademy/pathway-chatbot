@@ -705,7 +705,9 @@ export function CalendarCard({
           onClick={() =>
             append?.({
               role: "user",
-              content: "Yes, list the dates in text format",
+              content: cardData.title
+                ? `Yes, list the dates for "${cardData.title}" in text format`
+                : "Yes, list the dates in text format",
             } as Message)
           }
           // Base  — Light: gray-600 → 6.0:1 ✓ | Dark: gray-400 → 6.8:1 ✓  (was dark:gray-500 → 3.6:1 ❌)
