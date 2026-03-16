@@ -469,6 +469,23 @@ async def extract_structured_data(
 			if targeted:
 				nodes = targeted
 
+		# For graduation queries, filter to nodes containing the requested
+		# year's graduation data. Pinecone returns both 2025 and 2026
+		# graduation nodes; without filtering, the LLM prefers the more
+		# complete year's data even if the other year was requested.
+		if args.query_type.value == "graduation" and args.year:
+			year_str = str(args.year)
+			targeted = [
+				n for n in nodes
+				if year_str in (getattr(n, "text", "") or "")[:200]
+			]
+			if targeted:
+				logger.info(
+					"Graduation node filter: %d -> %d nodes for year %s",
+					len(nodes), len(targeted), year_str,
+				)
+				nodes = targeted
+
 	context_parts: list[str] = []
 	total_chars = 0
 	for node in nodes[:max_nodes]:
@@ -512,16 +529,60 @@ async def extract_structured_data(
 			f"Block {blocks[0]} events occur BEFORE Block {blocks[1]} events."
 		)
 	elif args.query_type.value == "graduation":
+		# Determine if this is a season-scoped graduation query
+		grad_season = getattr(args, "season", None)
+		grad_season_str = grad_season if isinstance(grad_season, str) else (grad_season.value if grad_season and hasattr(grad_season, "value") else None)
+		grad_season_blocks = _SEMESTER_BLOCKS.get(grad_season_str, None) if grad_season_str else None
+		use_term_label = args.year and args.year >= 2026
+		term_or_block = "Term" if use_term_label else "Block"
+
 		system_content += (
-			"\nThis is a GRADUATION query. The event types are DIFFERENT from block deadlines. "
-			"Graduation event types include: "
-			"Graduation Survey Deadline (BYU-Idaho), Graduation Survey Deadline (Ensign College), "
-			"BYUPW Graduation Application Deadline (BYU-Idaho & Ensign College), "
-			"Commencement (BYU-Idaho), Commencement (Ensign College), Awarding Process Starts. "
-			"Graduation data is organized by semester (Winter, Spring, Fall). "
-			"Use the 'blocks' field to group events by SEMESTER (not by block). "
-			"Use block_label values: 'Winter', 'Spring', 'Fall'. "
-			"Extract ALL graduation events for all semesters present in the documents. "
+			f"\nThis is a GRADUATION query for year {args.year}. "
+			"The event types are DIFFERENT from block deadlines. "
+			"The ONLY allowed graduation event names are (use these EXACTLY):\n"
+			"  - Graduation Survey Deadline (BYU-Idaho)\n"
+			"  - Graduation Survey Deadline (Ensign College)\n"
+			"  - BYUPW Graduation Application Deadline (BYU-Idaho & Ensign College)\n"
+			"  - Commencement (BYU-Idaho)\n"
+			"  - Commencement (Ensign College)\n"
+			"  - Awarding Process Starts\n"
+			"Do NOT invent event names that are not in this list. "
+			"There is NO event called 'Awarding Process Ends' or 'Graduation Ceremony'. "
+			f"IMPORTANT: Extract ONLY dates from the {args.year} GRADUATION section. "
+			f"The documents may contain graduation data for multiple years — "
+			f"use ONLY the '{args.year} GRADUATION DATES' section. "
+			f"Most dates will be in year {args.year}, but commencement dates may "
+			f"sometimes fall in {args.year + 1} — include those if they appear in "
+			f"the {args.year} graduation table. "
+			"Graduation data is organized PER BLOCK/TERM (e.g. Block 1 vs Block 2 for 2025, "
+			"Term 1 vs Term 2 for 2026). Each block/term has its OWN column of dates. "
+			"Use the 'blocks' field to group events by BLOCK/TERM. "
+			"CRITICAL: If an event has the SAME date in BOTH block/term columns, "
+			"include it in BOTH blocks/terms. For example, if Survey Deadline is Mar 2 "
+			"for both Term 1 and Term 2, include it in BOTH Term 1 and Term 2. "
+			"Use block_label values: 'Block 1', 'Block 2', etc. for 2025 data, "
+			"or 'Term 1', 'Term 2', etc. for 2026 data. "
+			"Each block/term is a SEPARATE tab. A full year has 6 blocks/terms. "
+			"A semester has 2 blocks/terms (Winter=1+2, Spring=3+4, Fall=5+6). "
+			"If a block/term column has NO dates for an event, OMIT that event entirely — "
+			"do NOT fabricate dates. Only include events that have explicit dates in the source. "
+			"Commencement dates are sometimes shared across blocks/terms in the same semester — "
+			"include them in BOTH blocks/terms if they appear. "
+		)
+		if grad_season_blocks:
+			lo, hi = grad_season_blocks
+			system_content += (
+				f"IMPORTANT: This query is scoped to the {grad_season_str.upper()} semester. "
+				f"Extract ONLY {term_or_block} {lo} and {term_or_block} {hi}. "
+				f"Do NOT include events from other semesters or blocks/terms. "
+				f"Populate the 'blocks' field with exactly 2 entries: "
+				f"one for {term_or_block} {lo} and one for {term_or_block} {hi}. "
+			)
+		else:
+			system_content += (
+				"Extract ALL graduation events for all blocks/terms present in the documents. "
+			)
+		system_content += (
 			"Each event MUST use a date explicitly present in the source documents."
 		)
 	elif args.block_number and scope != "full_year":
@@ -989,15 +1050,23 @@ def build_calendar_card(
 			tabs.append({"label": block_data.block_label, "active": i == 0, "events": block_events})
 
 		# Normalize tab labels to "Block N" (strip season prefixes like "Winter Block 1")
-		# For graduation queries, keep semester labels (Winter, Spring, Fall)
-		if args.query_type.value != "graduation":
+		# For graduation, normalize to "Term N" for 2026+, "Block N" for 2025
+		if args.query_type.value == "graduation":
+			use_term = args.year and args.year >= 2026
+			for tab in tabs:
+				m = re.search(r"\d+", tab.get("label") or "")
+				if m:
+					prefix = "Term" if use_term else "Block"
+					tab["label"] = f"{prefix} {m.group()}"
+		else:
 			for tab in tabs:
 				m = re.search(r"\d+", tab.get("label") or "")
 				if m:
 					tab["label"] = f"Block {m.group()}"
 
 		# Post-build validation: detect LLM duplication or empty tabs
-		# Skip block-based validation for graduation (uses semester tabs, not block tabs)
+		# Skip block-based validation for graduation (uses different event types)
+		# but still remove empty tabs (e.g. Spring/Fall 2026 with no dates yet)
 		if args.query_type.value != "graduation":
 			has_overflow = any(len(t["events"]) > _MAX_EVENTS_PER_TAB for t in tabs)
 			has_empty = any(len(t["events"]) == 0 for t in tabs) and any(len(t["events"]) > 0 for t in tabs)
@@ -1042,7 +1111,7 @@ def build_calendar_card(
 						)
 
 		# Ensure all expected blocks are present (fill missing from flat events)
-		# Skip for graduation (uses semester tabs, not block tabs)
+		# Skip for graduation (uses per-term/block tabs, not standard block tabs)
 		if args.query_type.value != "graduation":
 			scope_lower = scope_str.lower()
 			expected = _expected_blocks_for_scope(scope_lower, args.season)
@@ -1050,6 +1119,43 @@ def build_calendar_card(
 				tabs = _ensure_all_block_tabs(
 					tabs, extracted.events, expected, args.year, today,
 				)
+		else:
+			# Graduation: remove tabs with 0 events (e.g. Spring/Fall 2026 TBD).
+			# Keep only tabs that have at least 1 event.
+			non_empty_tabs = [t for t in tabs if len(t.get("events", [])) > 0]
+			if non_empty_tabs:
+				tabs = non_empty_tabs
+				for i, tab in enumerate(tabs):
+					tab["active"] = i == 0
+
+			# Season-scoped graduation: filter tabs to only the 2 terms for that season
+			grad_season_val = getattr(args, "season", None)
+			if isinstance(grad_season_val, str):
+				pass
+			elif grad_season_val and hasattr(grad_season_val, "value"):
+				grad_season_val = grad_season_val.value
+			else:
+				grad_season_val = None
+			if grad_season_val and tabs:
+				season_blocks = _SEMESTER_BLOCKS.get(grad_season_val)
+				if season_blocks:
+					lo, hi = season_blocks
+					filtered = [
+						t for t in tabs
+						if any(
+							str(n) in (t.get("label") or "")
+							for n in (lo, hi)
+						)
+					]
+					if filtered:
+						tabs = filtered
+						for i, tab in enumerate(tabs):
+							tab["active"] = i == 0
+						logger.info(
+							"Graduation tabs filtered to %s season: %s",
+							grad_season_val,
+							[t["label"] for t in tabs],
+						)
 
 	normalized_title = extracted.title
 	normalized_subtitle = extracted.subtitle or ""
@@ -1103,7 +1209,17 @@ def build_calendar_card(
 			except ValueError:
 				pass
 	elif args.query_type.value == "graduation":
-		normalized_title = f"{args.year} Graduation Dates"
+		grad_season_title = getattr(args, "season", None)
+		if isinstance(grad_season_title, str):
+			pass
+		elif grad_season_title and hasattr(grad_season_title, "value"):
+			grad_season_title = grad_season_title.value
+		else:
+			grad_season_title = None
+		if grad_season_title:
+			normalized_title = f"{grad_season_title.capitalize()} {args.year} Graduation Dates"
+		else:
+			normalized_title = f"{args.year} Graduation Dates"
 		# Compute subtitle from all events (flat or tabs)
 		all_dates: list[date] = []
 		for evt in events_source:

@@ -468,6 +468,38 @@ def _build_default_overview_args(
 	)
 
 
+_GRADUATION_INTENT_PATTERN = re.compile(
+	r"\b(?:graduation|commencement|convocation|awarding\s+process)\b",
+	re.IGNORECASE,
+)
+
+
+def _build_default_graduation_args(
+	message: str,
+	user_timezone: str,
+) -> Optional[CalendarToolArgs]:
+	"""When the user asks about graduation without specifying a year or season,
+	default to the current year's graduation dates instead of asking for
+	clarification."""
+	if not _GRADUATION_INTENT_PATTERN.search(message or ""):
+		return None
+	# If a year or season or block is explicit, let _build_explicit_calendar_args
+	# or the LLM handle it — don't interfere.
+	explicit_season, explicit_year, explicit_block = _extract_block_context(message)
+	if explicit_year or explicit_season or explicit_block:
+		return None
+	# Skip if the question is about policy, not dates
+	# (e.g., "How do I apply for graduation?")
+	if _is_policy_only_question(message):
+		return None
+
+	return CalendarToolArgs(
+		query_type="graduation",
+		year=_default_year_for_message(user_timezone),
+		timezone=user_timezone,
+	)
+
+
 # Calendar-intent keywords that indicate the user is asking about dates/deadlines.
 _CALENDAR_KEYWORD_PATTERN = re.compile(
 	r"\b(?:when|start|end|begin|open|close|deadline|date|calendar|schedule|"
@@ -498,9 +530,21 @@ def _build_explicit_calendar_args(
 
 	explicit_season, explicit_year, explicit_block = _extract_block_context(message)
 
-	# Need at least a block or season, plus a year
+	# Need at least a year
 	if not explicit_year:
 		return None
+
+	# Case 0: Graduation + year (e.g. "graduation dates 2025",
+	# "When is graduation for 2026?")
+	if _GRADUATION_INTENT_PATTERN.search(message or ""):
+		return CalendarToolArgs(
+			query_type="graduation",
+			year=explicit_year,
+			season=explicit_season,
+			timezone=user_timezone,
+		)
+
+	# Need at least a block or season, plus a year
 	if not explicit_block and not explicit_season:
 		return None
 
@@ -817,6 +861,13 @@ async def detect_calendar_intent_via_llm(
 			"Calendar router: defaulting broad overview request to full current-year calendar"
 		)
 		return default_overview_args, None, False
+
+	default_graduation_args = _build_default_graduation_args(message, user_timezone)
+	if default_graduation_args is not None:
+		logger.info(
+			"Calendar router: defaulting graduation request to current-year graduation dates"
+		)
+		return default_graduation_args, None, False
 
 	tool_def = get_calendar_tool_definition()
 
