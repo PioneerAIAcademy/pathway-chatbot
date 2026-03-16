@@ -360,7 +360,7 @@ export default function ChatMessage({
     <div className={`flex flex-col gap-2 ${isUser ? 'items-end' : 'items-start'}`}>
       {/* User message - dark bubble on right */}
       {isUser && (
-        <div className={`group flex flex-col items-end gap-2 ${isEditing ? 'w-full max-w-[90%] sm:max-w-[576px]' : ''}`}>
+        <div className={`group flex flex-col items-end gap-1 ${isEditing ? 'w-full max-w-[90%] sm:max-w-[576px]' : 'max-w-[90%] sm:max-w-[576px]'}`}>
           {isEditing ? (
             /* Edit mode - inline textarea with full width */
             <div className="w-full bg-[#F0EEE6] dark:bg-[#2a2a2a] border border-[rgba(31,30,29,0.15)] dark:border-[rgba(252,252,252,0.1)] rounded-2xl p-4">
@@ -395,7 +395,7 @@ export default function ChatMessage({
           ) : (
             /* Normal message display - hugs content */
             <>
-              <div className="bg-[#E9E7E1] dark:bg-[#242628] text-[#3D3D3A] dark:text-[#FCFCFC] px-4 sm:px-[17px] py-3 sm:py-[11px] rounded-[24px] rounded-br-[8px] max-w-[90%] sm:max-w-[576px] border border-[rgba(31,30,29,0.12)] dark:border-[rgba(252,252,252,0.06)]">
+              <div className="bg-[#E9E7E1] dark:bg-[#242628] text-[#3D3D3A] dark:text-[#FCFCFC] px-4 sm:px-[17px] py-3 sm:py-[11px] rounded-[24px] rounded-br-[8px] border border-[rgba(31,30,29,0.12)] dark:border-[rgba(252,252,252,0.06)]">
                 <p className="text-sm sm:text-[15.75px] leading-[24px] sm:leading-[28px] tracking-[-0.1px] break-words">{chatMessage.content}</p>
               </div>
               
