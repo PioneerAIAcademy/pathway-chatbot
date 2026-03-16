@@ -33,6 +33,14 @@ from app.utils.date_spans import extract_date_spans
 
 logger = logging.getLogger("uvicorn")
 
+# Padding appended to every typewriter chunk so that the TCP payload is large
+# enough to bypass Nagle's algorithm and proxy write-coalescing.  The Vercel AI
+# SDK parser splits on "\n" and filters out empty lines, so extra newlines are
+# harmless.  64 bytes of padding pushes even a single-character text token
+# (e.g., ``0:"H"\n``) above the typical ~80-byte threshold that triggers an
+# immediate TCP send.
+_STREAM_FLUSH_PADDING = "\n" * 64
+
 
 class VercelStreamResponse(StreamingResponse):
     """
@@ -47,17 +55,17 @@ class VercelStreamResponse(StreamingResponse):
     def convert_text(cls, token: str):
         # Escape newlines and double quotes to avoid breaking the stream
         token = json.dumps(token)
-        return f"{cls.TEXT_PREFIX}{token}\n"
+        return f"{cls.TEXT_PREFIX}{token}\n{_STREAM_FLUSH_PADDING}"
 
     @classmethod
     def convert_data(cls, data: dict):
         data_str = json.dumps(data)
-        return f"{cls.DATA_PREFIX}[{data_str}]\n"
+        return f"{cls.DATA_PREFIX}[{data_str}]\n{_STREAM_FLUSH_PADDING}"
 
     @classmethod
     def convert_error(cls, message: str):
         message_str = json.dumps(message)
-        return f"{cls.ERROR_PREFIX}{message_str}\n"
+        return f"{cls.ERROR_PREFIX}{message_str}\n{_STREAM_FLUSH_PADDING}"
 
     @classmethod
     def _iter_text_chunks(cls, text: str):
@@ -120,11 +128,14 @@ class VercelStreamResponse(StreamingResponse):
             calendar_query_type,
             calendar_progress_queue,
         )
-        super().__init__(content=content, media_type="text/plain")
+        # Use text/event-stream so reverse proxies (Render, Nginx, Cloudflare)
+        # recognise this as a streaming connection and disable response buffering.
+        super().__init__(content=content, media_type="text/event-stream")
         # Prevent proxy / browser buffering so each character-level chunk
         # reaches the client immediately for a visible typewriter effect.
-        self.headers["Cache-Control"] = "no-cache"
+        self.headers["Cache-Control"] = "no-cache, no-transform"
         self.headers["X-Accel-Buffering"] = "no"
+        self.headers["Connection"] = "keep-alive"
 
     @classmethod
     async def content_generator(
