@@ -158,7 +158,7 @@ def _log_exception_trace():
 
 # streaming endpoint - delete if not needed
 @r.post("")
-@limiter.limit("300/minute")
+@limiter.limit("10/minute")
 @observe(as_type="generation")
 async def chat(
     request: Request,
