@@ -39,8 +39,6 @@ def _get_openai_client() -> AsyncOpenAI:
 		_get_openai_client._client = AsyncOpenAI()
 	return _get_openai_client._client
 
-ACADEMIC_CALENDAR_SOURCE_URL = ACADEMIC_CALENDAR_URL
-
 
 def get_calendar_tool_definition() -> dict:
 	"""Return the OpenAI-compatible function schema for the calendar tool."""
@@ -1245,7 +1243,7 @@ def build_calendar_card(
 		"spotlight": spotlight,
 		"events": timeline_events,
 		"tabs": tabs,
-		"sourceUrl": extracted.source_url or ACADEMIC_CALENDAR_SOURCE_URL,
+		"sourceUrl": extracted.source_url or ACADEMIC_CALENDAR_URL,
 		"suggestedQuestions": [],
 		"footnote": extracted.footnote,
 	}

@@ -74,20 +74,6 @@ _DEADLINE_ALIASES: dict[str, tuple[str, ...]] = {
     ),
 }
 
-_FULL_YEAR_ALIASES: tuple[str, ...] = (
-    "full year",
-    "whole year",
-    "entire year",
-    "all year",
-    "for the year",
-    "for this year",
-    "this year",
-    "year overview",
-    "all terms",
-    "all blocks",
-    "all semesters",
-)
-
 
 _EVENT_NAME_PATTERNS: dict[str, tuple[str, ...]] = {
     "financial_hold": ("financial hold",),
@@ -178,17 +164,3 @@ def event_matches_deadline(event_name: str, specific_deadline: Optional[str]) ->
 
     value = _normalize_text(event_name)
     return any(_normalize_text(pattern) in value for pattern in patterns)
-
-
-def normalize_query_scope(text: str) -> Optional[str]:
-    normalized = _normalize_text(text)
-    if not normalized:
-        return None
-
-    if any(_normalize_text(alias) in normalized for alias in _FULL_YEAR_ALIASES):
-        return "full_year"
-
-    if re.search(r"\b(?:all|entire|full)\s+(?:registration|deadline|deadlines|holds|payments|fees|grades)\b", normalized):
-        return "full_year"
-
-    return None

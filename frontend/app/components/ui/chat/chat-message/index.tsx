@@ -16,7 +16,6 @@ import {
   MessageAnnotationType,
   SuggestedQuestionsData,
   ToolData,
-  UserLanguageData,
   getAnnotationData,
   getSourceAnnotationData,
 } from "../index";
@@ -191,10 +190,6 @@ function ChatMessageContent({
     };
   }
 
-  const userLanguageData = getAnnotationData<UserLanguageData>(
-    annotations,
-    MessageAnnotationType.USER_LANGUAGE,
-  );
   const dateSpansData = getAnnotationData<DateSpansData>(
     annotations,
     MessageAnnotationType.DATE_SPANS,
@@ -400,8 +395,8 @@ export default function ChatMessage({
           ) : (
             /* Normal message display - hugs content */
             <>
-              <div className="bg-[#E9E7E1] dark:bg-[#242628] text-[#3D3D3A] dark:text-[#FCFCFC] px-4 sm:px-[17px] py-3 sm:py-[11px] rounded-[24px] rounded-br-[8px] max-w-[90%] sm:max-w-[576px] border border-[rgba(31,30,29,0.12)] dark:border-[rgba(252,252,252,0.06)] overflow-wrap-anywhere">
-                <p className="text-sm sm:text-[15.75px] leading-[24px] sm:leading-[28px] tracking-[-0.1px] break-words overflow-wrap-anywhere">{chatMessage.content}</p>
+              <div className="bg-[#E9E7E1] dark:bg-[#242628] text-[#3D3D3A] dark:text-[#FCFCFC] px-4 sm:px-[17px] py-3 sm:py-[11px] rounded-[24px] rounded-br-[8px] max-w-[90%] sm:max-w-[576px] border border-[rgba(31,30,29,0.12)] dark:border-[rgba(252,252,252,0.06)]">
+                <p className="text-sm sm:text-[15.75px] leading-[24px] sm:leading-[28px] tracking-[-0.1px] break-words">{chatMessage.content}</p>
               </div>
               
               {/* Action buttons for user message - only visible on hover */}

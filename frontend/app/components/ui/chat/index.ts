@@ -21,7 +21,6 @@ export enum MessageAnnotationType {
   CALENDAR_ERROR = "calendar_error",
   DATE_SPANS = "date_spans",
   SUGGESTED_QUESTIONS = "suggested_questions",
-  LANGFUSE_TRACE_ID = "langfuse_trace_id",
   USER_LANGUAGE = "user_language",
 }
 
@@ -160,15 +159,6 @@ export type MessageAnnotation = {
   trace_id?: string;
 };
 
-const NODE_SCORE_THRESHOLD = 0.25;
-
-export function getLangfuseTraceId(
-  annotations: MessageAnnotation[],
-  type: MessageAnnotationType
-): any {
-  return annotations.find((annotation) => annotation.type === type);
-}
-
 export function getAnnotationData<T>(
   annotations: MessageAnnotation[],
   type: MessageAnnotationType,
@@ -195,7 +185,6 @@ export function getSourceAnnotationData(
 function preprocessSourceNodes(nodes: SourceNode[]): SourceNode[] {
   // Filter source nodes has lower score
   nodes = nodes
-    // .filter((node) => (node.score ?? 1) > NODE_SCORE_THRESHOLD)
     .filter((node) => isValidUrl(node.url))
     .sort((a, b) => (b.score ?? 1) - (a.score ?? 1))
     .map((node) => {

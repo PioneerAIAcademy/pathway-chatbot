@@ -12,7 +12,6 @@ from app.tools.calendar.cache import calendar_cache
 from app.tools.calendar.schema import CalendarToolArgs
 from app.tools.calendar.tool import (
     _get_today,
-    _season_for_block,
     build_calendar_card,
     compute_suggestions,
     extract_full_year_by_semester,
@@ -609,10 +608,9 @@ def _card_explanation_prompt(today: date, queried_year: int | None = None) -> st
 
 def _extract_year_from_card(card: dict[str, Any]) -> int | None:
     """Extract the queried year from card title/subtitle (e.g., 'Winter 2025' → 2025)."""
-    import re as _re
     for field in ("title", "subtitle"):
         val = card.get(field) or ""
-        m = _re.search(r"\b(20\d{2})\b", val)
+        m = re.search(r"\b(20\d{2})\b", val)
         if m:
             return int(m.group(1))
     return None
@@ -829,67 +827,6 @@ def build_calendar_intro(args: CalendarToolArgs) -> str:
     if season:
         return f"Here's the {season} {year} calendar:"
     return f"Here's the academic calendar for {year}:"
-
-
-def _format_text_date(value: Any) -> str:
-    if value is None:
-        return ""
-    raw = str(value).strip()
-    if not raw:
-        return ""
-    try:
-        parsed = date.fromisoformat(raw)
-    except Exception:
-        return raw
-    return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year}"
-
-
-def build_calendar_text_response(card: dict[str, Any]) -> str:
-    """Convert an already-built calendar card into a deterministic plain-text list."""
-    title = str(card.get("title") or "Academic Calendar").strip()
-    subtitle = str(card.get("subtitle") or "").strip()
-    tabs = card.get("tabs") or []
-    events = card.get("events") or []
-    footnote = str(card.get("footnote") or "").strip()
-
-    intro = f"Here are the key dates for {title} in text format:"
-    lines: list[str] = [intro]
-
-    if subtitle:
-        lines.extend(["", subtitle])
-
-    if tabs:
-        for tab in tabs:
-            label = str(tab.get("label") or "").strip()
-            tab_events = tab.get("events") or []
-            if not label or not tab_events:
-                continue
-            lines.extend(["", f"{label}:"])
-            for event in tab_events:
-                name = str(event.get("name") or "").strip()
-                if not name:
-                    continue
-                event_date = _format_text_date(event.get("date"))
-                if event_date:
-                    lines.append(f"- {name}: {event_date}")
-                else:
-                    lines.append(f"- {name}")
-    elif events:
-        lines.append("")
-        for event in events:
-            name = str(event.get("name") or "").strip()
-            if not name:
-                continue
-            event_date = _format_text_date(event.get("date"))
-            if event_date:
-                lines.append(f"- {name}: {event_date}")
-            else:
-                lines.append(f"- {name}")
-
-    if footnote:
-        lines.extend(["", footnote])
-
-    return "\n".join(lines).strip()
 
 
 def build_initial_calendar_metadata(args: CalendarToolArgs) -> dict[str, Any]:

@@ -1,9 +1,7 @@
 import { Message } from "ai";
 import {
   Clock,
-  ExternalLink,
   GraduationCap,
-  Sprout,
   AlertCircle,
   RefreshCw,
 } from "lucide-react";
@@ -491,10 +489,6 @@ export function CalendarCard({
     }
     return result;
   }, [displayEvents]);
-
-  const rowCount = timelineStarted
-    ? Math.max(SKELETON_ROW_COUNT, displayEvents.length)
-    : SKELETON_ROW_COUNT;
 
   const calendarYear = useMemo(() => detectCalendarYear(cardData), [cardData]);
 
