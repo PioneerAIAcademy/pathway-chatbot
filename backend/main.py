@@ -7,6 +7,7 @@ load_dotenv()
 
 import logging
 import os
+import signal
 
 import uvicorn
 from app.api.routers.chat import chat_router
@@ -34,7 +35,7 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
         if content_length:
             size = int(content_length)
             path = request.url.path
-            if path.startswith("/api/chat/feedback"):
+            if path.startswith("/api/v1/chat/feedback"):
                 limit = FEEDBACK_MAX_BODY_SIZE
                 label = "10MB"
             else:
@@ -47,7 +48,12 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
                 )
         return await call_next(request)
 
-app = FastAPI()
+app = FastAPI(
+    title="Pathway Missionary Assistant API",
+    version="1.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+)
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -117,10 +123,17 @@ mount_static_files(DATA_DIR, "/api/files/data")
 # Mount the output files from tools
 mount_static_files("output", "/api/files/output")
 
-app.include_router(chat_router, prefix="/api/chat")
-app.include_router(config_router, prefix="/api/chat/config")
-app.include_router(file_upload_router, prefix="/api/chat/upload")
+app.include_router(chat_router, prefix="/api/v1/chat")
+app.include_router(config_router, prefix="/api/v1/chat/config")
+app.include_router(file_upload_router, prefix="/api/v1/chat/upload")
 app.include_router(health_router, prefix="/api")
+
+
+def _handle_sigterm(_signum, _frame):
+    """Log SIGTERM so it appears in structured logs before Gunicorn shuts down workers."""
+    logger.info("Received SIGTERM — shutting down gracefully")
+
+signal.signal(signal.SIGTERM, _handle_sigterm)
 
 
 @app.on_event("startup")

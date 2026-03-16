@@ -25,6 +25,7 @@ from app.api.routers.models import (
     ThumbsRequest,
 )
 from app.api.routers.vercel_response import VercelStreamResponse
+from app.cache import cache_key, get_cached_response, set_cached_response
 from app.engine import get_chat_engine
 from app.engine.query_filter import generate_filters
 from app.security import InputValidator, SecurityValidationError, RiskLevel
@@ -279,6 +280,28 @@ async def chat(
         role = params.get("role", "missionary")
         filters = generate_filters(doc_ids, role)
 
+        # Check cache — identical question + role served instantly, no LLM call.
+        # NOTE: Calendar queries are excluded from this RAG cache because
+        # calendar responses include progressive card annotations that
+        # can't be replayed from flat text.  Calendar has its own cache
+        # layer (CalendarCache) that handles deduplication.
+        ck = cache_key(last_message_content, role)
+        _is_calendar_response = False  # set True later if calendar pipeline runs
+        cached_text = get_cached_response(ck)
+        if cached_text:
+            class _CachedResponse:
+                source_nodes = []
+                async def async_response_gen(self):
+                    yield cached_text
+            return VercelStreamResponse(
+                request,
+                EventCallbackHandler(),
+                _CachedResponse(),
+                data,
+                skip_suggestions=True,
+                emit_initial_status=False,
+            )
+
         langfuse_input = (
             f"(ACMs Question): {last_message_content}"
             if role == "ACM"
@@ -407,6 +430,7 @@ async def chat(
                 )
 
         if calendar_args is not None:
+            _is_calendar_response = True
             logger.info(
                 f"Calendar intent detected: {calendar_args.query_type.value}, "
                 f"block={calendar_args.block_number}, season={calendar_args.season}"
@@ -555,6 +579,12 @@ async def chat(
                 langfuse.flush()
             except Exception as langfuse_error:
                 logger.error(f"Failed to update Langfuse trace output: {langfuse_error}")
+
+            # Save response to cache so identical future questions are served instantly.
+            # Skip for calendar responses — they have their own CalendarCache and
+            # the flat text here doesn't include the progressive card annotations.
+            if final_response and not _is_calendar_response:
+                set_cached_response(ck, final_response)
 
             # Ensure chat engine memory is cleaned up after the request completes.
             if chat_engine is not None:
