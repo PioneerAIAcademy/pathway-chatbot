@@ -2,7 +2,7 @@ import asyncio
 import logging
 import hashlib
 import time
-from typing import Tuple, Any, Optional
+from typing import Callable, Tuple, Any, Optional
 import traceback
 import sys
 from urllib.parse import urlparse
@@ -391,31 +391,35 @@ async def chat(
 
         # Build the calendar pipeline that runs concurrently with the chat stream.
         # Intent detection is already done; this only does retrieval + extraction.
+        # Only define when calendar_args is present to avoid pointless Langfuse traces.
         _calendar_progress_queue: Optional[asyncio.Queue] = None
+        _calendar_pipeline_fn: Optional[Callable] = None
         if calendar_args is not None:
             _calendar_progress_queue = asyncio.Queue(maxsize=8)
 
-        async def _calendar_pipeline():
-            """Runs concurrently with the main RAG stream."""
-            nonlocal calendar_metadata
-            card, pipeline_metadata = await run_calendar_pipeline(
-                calendar_args,
-                shared_index,
-                user_query=last_message_content,
-                user_language=user_language,
-                chat_history=messages,
-                skip_cache=calendar_skip_cache,
-                progress_queue=_calendar_progress_queue,
-            )
-            if pipeline_metadata:
-                calendar_metadata.update(pipeline_metadata)
-            if card is None and pipeline_metadata.get("pipeline_status") == "unsupported_year":
-                return {
-                    "__calendar_error_reason": "unsupported_year",
-                    "requestedYear": pipeline_metadata.get("requested_year"),
-                    "availableYears": pipeline_metadata.get("available_years_from_nodes", []),
-                }
-            return card
+            async def _calendar_pipeline():
+                """Runs concurrently with the main RAG stream."""
+                nonlocal calendar_metadata
+                card, pipeline_metadata = await run_calendar_pipeline(
+                    calendar_args,
+                    shared_index,
+                    user_query=last_message_content,
+                    user_language=user_language,
+                    chat_history=messages,
+                    skip_cache=calendar_skip_cache,
+                    progress_queue=_calendar_progress_queue,
+                )
+                if pipeline_metadata:
+                    calendar_metadata.update(pipeline_metadata)
+                if card is None and pipeline_metadata.get("pipeline_status") == "unsupported_year":
+                    return {
+                        "__calendar_error_reason": "unsupported_year",
+                        "requestedYear": pipeline_metadata.get("requested_year"),
+                        "availableYears": pipeline_metadata.get("available_years_from_nodes", []),
+                    }
+                return card
+
+            _calendar_pipeline_fn = _calendar_pipeline
 
         async def _calendar_secondary_text_pipeline(calendar_data: dict) -> Optional[dict[str, Any]]:
             """Optional phase-2 mixed-intent follow-up using normal RAG.
@@ -622,7 +626,7 @@ async def chat(
             skip_suggestions=is_suspicious or (calendar_args is not None),
             on_stream_end=_on_stream_end,
             emit_initial_status=False,
-            calendar_pipeline=_calendar_pipeline,
+            calendar_pipeline=_calendar_pipeline_fn,
             calendar_intro=calendar_intro,
             supplemental_text_pipeline=_calendar_secondary_text_pipeline,
             rag_fallback=_rag_fallback_for_calendar,
