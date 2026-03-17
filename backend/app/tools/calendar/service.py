@@ -1,10 +1,12 @@
 import asyncio
 import json
 import logging
+import os
 import re
 from datetime import date
 from typing import Any, Optional
 
+from langfuse.decorators import langfuse_context, observe
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core.settings import Settings
 
@@ -176,6 +178,7 @@ def _build_retrieved_docs_metadata(
     }
 
 
+@observe(as_type="generation", name="calendar-intro-localization")
 async def localize_calendar_intro(
     intro_text: str,
     user_language: Optional[str],
@@ -212,6 +215,11 @@ async def localize_calendar_intro(
             ]
         )
         translated = (response.message.content or "").strip()
+        langfuse_context.update_current_observation(
+            model=os.environ.get("MODEL", "gpt-4o-mini"),
+            input=intro_text,
+            output=translated,
+        )
         return translated if translated else intro_text
     except Exception as e:
         logger.warning(f"Calendar intro localization failed: {e}")
@@ -338,6 +346,7 @@ def _parse_translation_json(raw: str) -> Optional[dict[str, Any]]:
     return None
 
 
+@observe(as_type="generation", name="calendar-card-localization")
 async def localize_calendar_card(
     card: dict[str, Any],
     user_language: Optional[str],
@@ -375,6 +384,11 @@ async def localize_calendar_card(
             ]
         )
         translated = _parse_translation_json(response.message.content or "")
+        langfuse_context.update_current_observation(
+            model=os.environ.get("MODEL", "gpt-4o-mini"),
+            input=f"Localize card ({language})",
+            output=(response.message.content or "")[:300],
+        )
         if translated is not None:
             return _apply_translated_card(card, translated)
         return card
@@ -425,6 +439,7 @@ def _clamp_confidence(value: Any, default: float) -> float:
     return parsed
 
 
+@observe(as_type="generation", name="calendar-secondary-text-classifier")
 async def _classify_secondary_text_mode_llm(
     args: CalendarToolArgs,
     card: dict[str, Any],
@@ -454,17 +469,25 @@ async def _classify_secondary_text_mode_llm(
             },
         }
 
+        user_content = json.dumps(payload, ensure_ascii=False)
         response = await Settings.llm.achat(
             messages=[
                 ChatMessage(role=MessageRole.SYSTEM, content=_SECONDARY_TEXT_MODE_PROMPT),
                 ChatMessage(
                     role=MessageRole.USER,
-                    content=json.dumps(payload, ensure_ascii=False),
+                    content=user_content,
                 ),
             ],
         )
 
-        parsed = _parse_translation_json(response.message.content or "")
+        raw_output = response.message.content or ""
+        langfuse_context.update_current_observation(
+            model=os.environ.get("MODEL", "gpt-4o-mini"),
+            input=user_content,
+            output=raw_output,
+        )
+
+        parsed = _parse_translation_json(raw_output)
         if not isinstance(parsed, dict):
             return None
 
@@ -709,6 +732,7 @@ def _build_card_explanation_payload(
     return payload_dict
 
 
+@observe(as_type="generation", name="calendar-card-explanation")
 async def _generate_card_explanation(
     card: dict[str, Any],
     user_query: str,
@@ -733,7 +757,13 @@ async def _generate_card_explanation(
                 ChatMessage(role=MessageRole.USER, content=payload),
             ],
         )
-        return (response.message.content or "").strip()
+        output = (response.message.content or "").strip()
+        langfuse_context.update_current_observation(
+            model=os.environ.get("MODEL", "gpt-4o-mini"),
+            input=payload,
+            output=output,
+        )
+        return output
     except Exception as e:
         logger.warning("Card explanation generation failed: %s", e)
         return ""
@@ -845,6 +875,7 @@ def build_initial_calendar_metadata(args: CalendarToolArgs) -> dict[str, Any]:
     }
 
 
+@observe(name="calendar-pipeline")
 async def run_calendar_pipeline(
     calendar_args: Optional[CalendarToolArgs],
     shared_index: Any,
@@ -855,6 +886,23 @@ async def run_calendar_pipeline(
     progress_queue: Optional[asyncio.Queue] = None,
 ) -> tuple[Optional[dict], dict[str, Any]]:
     """Run calendar retrieval+extraction+card build, returning card and metadata."""
+    # Set clean trace input for Langfuse UI (instead of raw function args)
+    _pipeline_input = user_query or "(no query)"
+    if calendar_args is not None:
+        _scope_parts = [calendar_args.query_type.value]
+        if calendar_args.season:
+            _scope_parts.append(calendar_args.season)
+        if calendar_args.year:
+            _scope_parts.append(str(calendar_args.year))
+        if calendar_args.block_number:
+            _scope_parts.append(f"block {calendar_args.block_number}")
+        if calendar_args.specific_deadline:
+            _scope_parts.append(calendar_args.specific_deadline)
+        _pipeline_input += f" [{' | '.join(_scope_parts)}]"
+    langfuse_context.update_current_trace(
+        input=_pipeline_input,
+    )
+
     metadata: dict[str, Any] = {}
 
     async def _report(stage: str) -> None:
@@ -1191,6 +1239,21 @@ async def run_calendar_pipeline(
         )
         logger.info("Calendar pipeline: card built & verified successfully")
 
+        # Set clean trace output for Langfuse UI
+        _output_summary = card.get("title", "")
+        if card.get("subtitle"):
+            _output_summary += f" — {card['subtitle']}"
+        _evt_count = len(card.get("events") or [])
+        _tab_count = len(card.get("tabs") or [])
+        if _tab_count:
+            _tab_evts = sum(len(t.get("events", [])) for t in card.get("tabs", []) if isinstance(t, dict))
+            _output_summary += f" ({_tab_count} tabs, {_tab_evts} events)"
+        elif _evt_count:
+            _output_summary += f" ({_evt_count} events)"
+        if card.get("postCardText"):
+            _output_summary += f"\n{card['postCardText']}"
+        langfuse_context.update_current_trace(output=_output_summary)
+
         # Phase 3: cache the card without post-card text (it's
         # conversation-specific and regenerated on cache hits).
         card_to_cache = {k: v for k, v in card.items() if k != "postCardText"}
@@ -1202,4 +1265,5 @@ async def run_calendar_pipeline(
     except Exception as e:
         logger.error(f"Calendar pipeline error: {e}", exc_info=True)
         metadata.update({"pipeline_status": "error", "pipeline_error": str(e)})
+        langfuse_context.update_current_trace(output=f"ERROR: {e}")
         return None, metadata

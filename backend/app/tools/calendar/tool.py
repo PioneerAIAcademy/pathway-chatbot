@@ -17,6 +17,7 @@ import re
 from datetime import date, datetime
 from typing import Optional
 
+from langfuse.decorators import langfuse_context, observe
 from openai import AsyncOpenAI
 from zoneinfo import ZoneInfo
 
@@ -392,6 +393,39 @@ def _deduplicate_node_content(nodes: list) -> list:
 	return unique
 
 
+@observe(as_type="generation", name="calendar-extraction-llm")
+async def _extraction_llm_call(
+	client: AsyncOpenAI,
+	model: str,
+	system_content: str,
+	user_content: str,
+):
+	"""Tracked wrapper around the direct OpenAI extraction call."""
+	response = await client.chat.completions.create(
+		model=model,
+		temperature=0,
+		response_format={"type": "json_object"},
+		messages=[
+			{"role": "system", "content": system_content},
+			{"role": "user", "content": user_content},
+		],
+	)
+	usage = getattr(response, "usage", None)
+	langfuse_context.update_current_observation(
+		model=model,
+		usage={
+			"input": getattr(usage, "prompt_tokens", 0) if usage else 0,
+			"output": getattr(usage, "completion_tokens", 0) if usage else 0,
+		},
+		input=[
+			{"role": "system", "content": system_content[:300] + "..."},
+			{"role": "user", "content": user_content[:300] + "..."},
+		],
+		output=(response.choices[0].message.content or "")[:500],
+	)
+	return response
+
+
 _SEMESTER_BLOCKS: dict[str, tuple[int, int]] = {
 	"winter": (1, 2),
 	"spring": (3, 4),
@@ -399,6 +433,7 @@ _SEMESTER_BLOCKS: dict[str, tuple[int, int]] = {
 }
 
 
+@observe(name="calendar-extraction")
 async def extract_structured_data(
 	nodes: list,
 	args: CalendarToolArgs,
@@ -605,14 +640,8 @@ async def extract_structured_data(
 	for attempt in range(1, max_attempts + 1):
 		try:
 			logger.info(f"Extraction attempt {attempt}/{max_attempts} (JSON mode)")
-			response = await client.chat.completions.create(
-				model=model,
-				temperature=0,
-				response_format={"type": "json_object"},
-				messages=[
-					{"role": "system", "content": system_content},
-					{"role": "user", "content": user_content},
-				],
+			response = await _extraction_llm_call(
+				client, model, system_content, user_content,
 			)
 			raw = (response.choices[0].message.content or "").strip()
 
@@ -659,6 +688,7 @@ async def extract_structured_data(
 	return None
 
 
+@observe(name="calendar-full-year-extraction")
 async def extract_full_year_by_semester(
 	nodes: list,
 	args: CalendarToolArgs,

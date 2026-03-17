@@ -9,10 +9,12 @@ with the main chat response. If not, only the normal RAG response streams.
 
 import json
 import logging
+import os
 import re
 from datetime import datetime
 from typing import List, Optional
 
+from langfuse.decorators import langfuse_context, observe
 from llama_index.core.llms import ChatMessage, MessageRole
 from llama_index.core.settings import Settings
 from zoneinfo import ZoneInfo
@@ -752,6 +754,24 @@ def _apply_next_block_default(
 	)
 
 
+@observe(as_type="generation", name="calendar-router-llm")
+async def _router_llm_call(messages: list, tools: list):
+	"""Thin wrapper around the router's tool_choice=auto LLM call for Langfuse tracking."""
+	model = os.environ.get("MODEL", "gpt-4o-mini")
+	response = await Settings.llm.achat(
+		messages=messages,
+		tools=tools,
+		tool_choice="auto",
+	)
+	langfuse_context.update_current_observation(
+		model=model,
+		input=[{"role": str(m.role), "content": (m.content or "")[:500]} for m in messages],
+		output=str(getattr(response.message, "content", "") or "")[:500],
+	)
+	return response
+
+
+@observe(as_type="generation", name="calendar-pushback-detection")
 async def _detect_pushback_via_llm(message: str) -> bool:
 	"""Use a lightweight LLM call to detect pushback/doubt in any language.
 
@@ -763,6 +783,8 @@ async def _detect_pushback_via_llm(message: str) -> bool:
 	"""
 	if not message or len(message.strip()) < 3:
 		return False
+
+	model = os.environ.get("MODEL", "gpt-4o-mini")
 
 	prompt = (
 		"Classify the following user message. Does the user express doubt, "
@@ -783,12 +805,20 @@ async def _detect_pushback_via_llm(message: str) -> bool:
 			"Calendar pushback detection: message=%r → %s",
 			message[:80], "PUSHBACK" if is_pushback else "not pushback",
 		)
+
+		langfuse_context.update_current_observation(
+			model=model,
+			input=prompt,
+			output=answer,
+		)
+
 		return is_pushback
 	except Exception as e:
 		logger.error("Calendar pushback detection failed: %s", e)
 		return False
 
 
+@observe(name="calendar-router")
 async def detect_calendar_intent_via_llm(
 	message: str,
 	user_timezone: str = "UTC",
@@ -924,10 +954,8 @@ async def detect_calendar_intent_via_llm(
 	user_msg = ChatMessage(role=MessageRole.USER, content=message)
 
 	try:
-		response = await Settings.llm.achat(
-			messages=[system_msg, *history_msgs, user_msg],
-			tools=[tool_def],
-			tool_choice="auto",
+		response = await _router_llm_call(
+			[system_msg, *history_msgs, user_msg], [tool_def],
 		)
 	except Exception as e:
 		logger.error(f"Calendar router LLM call failed: {e}")

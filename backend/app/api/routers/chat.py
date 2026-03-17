@@ -75,6 +75,7 @@ class _StaticResponse:
         yield self.response
 
 
+@observe(as_type="generation", name="text-format-detection")
 async def _is_text_format_request(message: str) -> bool:
     """Detect if the user is asking for calendar dates in plain text format.
 
@@ -97,9 +98,15 @@ async def _is_text_format_request(message: str) -> bool:
 
     try:
         from llama_index.core.settings import Settings as LISettings
+        import os
         response = await LISettings.llm.acomplete(prompt)
         answer = (response.text or "").strip().upper()
         is_text = answer.startswith("YES")
+        langfuse_context.update_current_observation(
+            model=os.environ.get("MODEL", "gpt-4o-mini"),
+            input=message,
+            output=answer,
+        )
         logger.info(
             "Text-format detection: message=%r → %s",
             message[:80], "TEXT_FORMAT" if is_text else "not text format",
@@ -128,7 +135,7 @@ def _log_exception_trace():
 # streaming endpoint - delete if not needed
 @r.post("")
 @limiter.limit("10/minute")
-@observe(as_type="generation")
+@observe()
 async def chat(
     request: Request,
     data: ChatData,

@@ -1,7 +1,9 @@
 import logging
+import os
 from typing import List
 
 from app.api.routers.models import Message
+from langfuse.decorators import langfuse_context, observe
 from llama_index.core.prompts import PromptTemplate
 from llama_index.core.settings import Settings
 from pydantic import BaseModel
@@ -30,6 +32,7 @@ class NextQuestions(BaseModel):
 
 class NextQuestionSuggestion:
     @staticmethod
+    @observe(as_type="generation", name="suggestion-generation")
     async def suggest_next_questions(
         messages: List[Message],
         number_of_questions: int = N_QUESTION_TO_GENERATE,
@@ -56,6 +59,12 @@ class NextQuestionSuggestion:
                 prompt=NEXT_QUESTIONS_SUGGESTION_PROMPT,
                 conversation=conversation,
                 number_of_questions=number_of_questions,
+            )
+
+            langfuse_context.update_current_observation(
+                model=os.environ.get("MODEL", "gpt-4o-mini"),
+                input=conversation,
+                output=str(output.questions),
             )
 
             return output.questions
