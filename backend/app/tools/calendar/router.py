@@ -101,10 +101,26 @@ _GENERAL_OVERVIEW_PATTERN = re.compile(
 )
 
 _POLICY_ONLY_PATTERN = re.compile(
-	r"\b(?:what\s+does|difference\s+between|what\s+happens|consequences?|"
-	r"exceptions?|appeal|how\s+to|how\s+do|how\s+can|how\s+long|"
-	r"help\s+me\s+find|find\s+information|provide\s+a\s+link|give\s+me\s+a\s+link|"
-	r"where\s+can|where\s+is|what\s+should\s+(?:a\s+student|students)\s+do)\b",
+	r"\b(?:"
+	# Definitional / explanatory
+	r"what\s+(?:is|are|does|happens|do\s+I\s+need\s+to\s+know|should\s+I\s+know|should\s+(?:a\s+student|students|missionaries?)\s+(?:do|know))"
+	r"|tell\s+me\s+about|explain|describe|definition\s+of|meaning\s+of"
+	r"|help\s+me\s+understand|I\s+(?:need|want)\s+to\s+(?:understand|learn\s+about|know\s+about)"
+	r"|information\s+(?:about|on|regarding)|details?\s+(?:about|on|regarding)"
+	# Comparative / consequential
+	r"|difference\s+between|consequences?|implications?"
+	# Procedural / policy
+	r"|exceptions?|appeal|how\s+to|how\s+do|how\s+can|how\s+long|how\s+does"
+	r"|what\s+steps|process\s+for|procedure\s+for|requirements?\s+for|rules?\s+(?:for|about|regarding)"
+	r"|policy\s+(?:on|for|about|regarding)|policies\s+(?:on|for|about|regarding)"
+	# Resource-seeking
+	r"|help\s+me\s+find|find\s+information|provide\s+a\s+link|give\s+me\s+a\s+link"
+	r"|where\s+can|where\s+is|where\s+do"
+	# Advice / guidance
+	r"|what\s+(?:should|would|could|can)\s+(?:I|we|a\s+student|students|missionaries?)"
+	r"|(?:any|some)\s+(?:tips|advice|guidance|suggestions?)"
+	r"|can\s+(?:I|a\s+student|students|missionaries?)"
+	r")\b",
 	re.IGNORECASE,
 )
 
