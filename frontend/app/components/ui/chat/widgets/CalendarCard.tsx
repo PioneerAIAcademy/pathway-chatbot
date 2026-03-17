@@ -102,13 +102,13 @@ function CardIcon({
   type: CalendarCardData["type"];
   title?: string;
 }) {
-  const cls = "w-5 h-5 text-[#002E5D]";
-  if (type === "graduation") return <GraduationCap className={cls} />;
+  const base = "w-5 h-5";
+  if (type === "graduation") return <GraduationCap className={`${base} text-[#002E5D]`} />;
   const t = (title ?? "").toLowerCase();
-  if (t.includes("winter")) return <BsSnow2 className={cls} />;
-  if (t.includes("spring")) return <LuFlower2 className={cls} />;
-  if (t.includes("fall")) return <FaCanadianMapleLeaf className={cls} />;
-  return <CiCalendar className={cls} />;
+  if (t.includes("winter")) return <BsSnow2 className={`${base} text-[#3B9FC9]`} />;
+  if (t.includes("spring")) return <LuFlower2 className={`${base} text-[#E16BA8]`} />;
+  if (t.includes("fall")) return <FaCanadianMapleLeaf className={`${base} text-[#D97706]`} />;
+  return <CiCalendar className={`${base} text-[#002E5D]`} />;
 }
 
 // --- Status badge ---
