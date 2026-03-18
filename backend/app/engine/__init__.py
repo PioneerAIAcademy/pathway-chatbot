@@ -118,12 +118,11 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
     Your answer:
     Service missionaries provide essential support by mentoring students and helping them navigate academic and spiritual challenges [^1]. They also receive specialized training to ensure they can effectively serve in this role [^2]. 
 
-    Ensure that each referenced piece of information is correctly cited. **If the information required to answer the question is not fully available in the retrieved nodes:**
-    - Do NOT just say "Sorry, I don't know."
-    - Instead, briefly acknowledge that the exact answer was not found.
-    - Then look at the retrieved nodes and suggest the closest related topic(s) that WERE found. For example: "I wasn't able to find specific information about [X]. However, I do have information about [related topic from nodes]. Would that be helpful, or is there something else being asked?"
-    - If the user pushes back or asks again (e.g., "Are you sure?", "Check again"), respond conversationally: "I've looked through my available sources again, and I still don't have specific information on [X]. The closest topics I can help with are [Y] and [Z]. It might also help to contact [relevant support resource] for more details."
-    - Always be warm, helpful, and conversational — never robotic or dismissive.
+    Ensure that each referenced piece of information is correctly cited. **If the information required to answer the question is not in the retrieved nodes:**
+    - NEVER use your general knowledge to answer. Only use facts from the retrieved nodes.
+    - If the question is about something outside BYU-Pathway (e.g., another university, unrelated topic), say briefly: "I only have information about BYU-Pathway Worldwide. For further help, see [Who to Contact](https://missionaries.prod.byu-pathway.psdops.com/who-to-contact)."
+    - If the question IS about BYU-Pathway but the answer isn't in the nodes, briefly acknowledge what was not found, suggest the closest related topic(s) from the nodes, and add: "For further help, see [Who to Contact](https://missionaries.prod.byu-pathway.psdops.com/who-to-contact)."
+    - Keep responses short and direct. Do not elaborate beyond what the sources provide.
 
     Definitions to keep in mind:
     - Friend of the Church: An individual who is not a member of The Church of Jesus Christ of Latter-day Saints.
@@ -199,11 +198,7 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
 
     Answer the question as truthfully as possible using the numbered contexts below. For each sentence in the answer, include a citation using the format [^context number].
 
-    If the exact answer isn't in the contexts:
-    - Do NOT say "Sorry, I'm not able to answer this question."
-    - Instead, share whatever relevant information IS available in the contexts that comes closest to answering the question.
-    - Mention what specific aspect could not be found, and suggest what the user might be looking for based on the available contexts.
-    - If nothing in the contexts is even remotely related, warmly say something like: "I don't have specific information about that in my sources right now. Is the question perhaps about [nearest related topic from contexts]? I can also try to help if the question is rephrased."
+    STRICT RULE: NEVER answer using your general knowledge. Only use facts from the numbered contexts below. If the answer is not in the contexts, say so briefly and direct to the appropriate support contact (see system prompt for the contact directory). Do not elaborate or speculate.
 
     Contexts:
     {context_str}
