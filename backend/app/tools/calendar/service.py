@@ -798,8 +798,8 @@ async def build_secondary_calendar_text(
             "confidence": confidence,
             "reason": reason,
             "text": (
-                "Here is a walkthrough of the calendar deadlines. "
-                "Should the non-calendar part be answered separately as well?"
+                "I've walked through the calendar deadlines above. "
+                "It looks like there's more to your question. I'm ready to help with the rest whenever you are."
             ),
         }
 

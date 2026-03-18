@@ -8,7 +8,6 @@ import {
 import { BsSnow2 } from "react-icons/bs";
 import { CiCalendar } from "react-icons/ci";
 import { FaCanadianMapleLeaf } from "react-icons/fa";
-import { LuFlower2 } from "react-icons/lu";
 import { useEffect, useMemo, useState } from "react";
 import type {
   CalendarCardData,
@@ -94,21 +93,69 @@ const TIMING = {
 
 const SKELETON_ROW_COUNT = 4;
 
-// --- Card type icon (season-aware) ---
-function CardIcon({
-  type,
-  title,
-}: {
-  type: CalendarCardData["type"];
-  title?: string;
-}) {
-  const base = "w-5 h-5";
-  if (type === "graduation") return <GraduationCap className={`${base} text-[#002E5D]`} />;
+// --- Season detection helper ---
+function detectSeason(type: CalendarCardData["type"], title?: string): "winter" | "spring" | "fall" | "graduation" | "calendar" {
+  if (type === "graduation") return "graduation";
   const t = (title ?? "").toLowerCase();
-  if (t.includes("winter")) return <BsSnow2 className={`${base} text-[#3B9FC9]`} />;
-  if (t.includes("spring")) return <LuFlower2 className={`${base} text-[#E16BA8]`} />;
-  if (t.includes("fall")) return <FaCanadianMapleLeaf className={`${base} text-[#D97706]`} />;
-  return <CiCalendar className={`${base} text-[#002E5D]`} />;
+  if (t.includes("winter")) return "winter";
+  if (t.includes("spring")) return "spring";
+  if (t.includes("fall")) return "fall";
+  return "calendar";
+}
+
+// --- Season-aware icon background ---
+// Full class strings so Tailwind JIT can detect them at build time.
+const SEASON_ICON_BG: Record<string, string> = {
+  winter:     "bg-[#dceeff] dark:bg-[#0d2240]",
+  spring:     "bg-[#d4f5e2] dark:bg-[#0d2818]",
+  fall:       "bg-[#fde8cc] dark:bg-[#2a1500]",
+  graduation: "bg-[#ede8ff] dark:bg-[#1a0d40]",
+  calendar:   "bg-[#ffe4e8] dark:bg-[#2a0d14]",
+};
+
+function seasonIconBgClass(season: string): string {
+  return SEASON_ICON_BG[season] ?? SEASON_ICON_BG.calendar;
+}
+
+// --- Card type icon (season-aware) ---
+function CardIcon({ season }: { season: string }) {
+  const base = "w-6 h-6";
+  switch (season) {
+    case "winter":
+      return <BsSnow2 className={`${base} text-[#0a5abf] dark:text-[#e8f4ff]`} />;
+    case "spring":
+      return (
+        <svg className="w-7 h-7 text-[#0d6e3e] dark:text-[#e8fff0]" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="2.5" fill="currentColor" />
+          <ellipse cx="12" cy="6.5" rx="2" ry="3" fill="currentColor" opacity="0.7" />
+          <ellipse cx="12" cy="17.5" rx="2" ry="3" fill="currentColor" opacity="0.7" />
+          <ellipse cx="6.5" cy="12" rx="3" ry="2" fill="currentColor" opacity="0.7" />
+          <ellipse cx="17.5" cy="12" rx="3" ry="2" fill="currentColor" opacity="0.7" />
+          <ellipse cx="8.3" cy="8.3" rx="2" ry="3" transform="rotate(-45 8.3 8.3)" fill="currentColor" opacity="0.5" />
+          <ellipse cx="15.7" cy="15.7" rx="2" ry="3" transform="rotate(-45 15.7 15.7)" fill="currentColor" opacity="0.5" />
+          <ellipse cx="15.7" cy="8.3" rx="2" ry="3" transform="rotate(45 15.7 8.3)" fill="currentColor" opacity="0.5" />
+          <ellipse cx="8.3" cy="15.7" rx="2" ry="3" transform="rotate(45 8.3 15.7)" fill="currentColor" opacity="0.5" />
+        </svg>
+      );
+    case "fall":
+      return <FaCanadianMapleLeaf className={`${base} text-[#8a3500] dark:text-[#fff3e0]`} />;
+    case "graduation":
+      return <GraduationCap className={`${base} text-[#5b21b6] dark:text-[#ede8ff]`} />;
+    default:
+      return (
+        <svg className={`${base} text-[#9f1239] dark:text-[#ffe4e8]`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="4" width="18" height="17" rx="2.5" fill="currentColor" opacity="0.15" stroke="currentColor" />
+          <line x1="3" y1="9" x2="21" y2="9" />
+          <line x1="8" y1="2" x2="8" y2="6" strokeWidth="2" />
+          <line x1="16" y1="2" x2="16" y2="6" strokeWidth="2" />
+          <circle cx="8" cy="14" r="1.2" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="14" r="1.2" fill="currentColor" stroke="none" />
+          <circle cx="16" cy="14" r="1.2" fill="currentColor" stroke="none" />
+          <circle cx="8" cy="18" r="1.2" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="18" r="1.2" fill="currentColor" stroke="none" />
+        </svg>
+      );
+  }
 }
 
 // --- Status badge ---
@@ -466,6 +513,8 @@ export function CalendarCard({
     return () => clearTimeout(stallId);
   }, [dataReady, state?.phase]);
 
+  const season = detectSeason(cardData.type ?? "block", cardData.title);
+
   const headerLoaded = dataReady && elapsed >= TIMING.header;
   const tabsLoaded = dataReady && elapsed >= TIMING.tabs;
   const spotlightLoaded = dataReady && elapsed >= TIMING.spotlight;
@@ -511,8 +560,8 @@ export function CalendarCard({
           {headerLoaded ? (
             <div className={`${styles.headerReveal} w-full min-w-0`}>
               <div className="flex items-start gap-2 sm:gap-3 min-w-0">
-                <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-[hsl(var(--header-bg))] to-amber-500 flex items-center justify-center shadow-[0_4px_12px_rgba(255,195,40,0.18)] shrink-0 mt-0.5">
-                  <CardIcon type={cardData.type ?? "block"} title={cardData.title} />
+                <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-xl ${seasonIconBgClass(season)} flex items-center justify-center shrink-0 mt-0.5`}>
+                  <CardIcon season={season} />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start justify-between gap-1.5 sm:gap-2 min-w-0">
