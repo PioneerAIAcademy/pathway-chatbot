@@ -118,7 +118,12 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
     Your answer:
     Service missionaries provide essential support by mentoring students and helping them navigate academic and spiritual challenges [^1]. They also receive specialized training to ensure they can effectively serve in this role [^2]. 
 
-    Ensure that each referenced piece of information is correctly cited. **If the information required to answer the question is not available in the retrieved nodes, respond with: "Sorry, I don't know."**
+    Ensure that each referenced piece of information is correctly cited. **If the information required to answer the question is not fully available in the retrieved nodes:**
+    - Do NOT just say "Sorry, I don't know."
+    - Instead, briefly acknowledge that the exact answer was not found.
+    - Then look at the retrieved nodes and suggest the closest related topic(s) that WERE found. For example: "I wasn't able to find specific information about [X]. However, I do have information about [related topic from nodes]. Would that be helpful, or is there something else being asked?"
+    - If the user pushes back or asks again (e.g., "Are you sure?", "Check again"), respond conversationally: "I've looked through my available sources again, and I still don't have specific information on [X]. The closest topics I can help with are [Y] and [Z]. It might also help to contact [relevant support resource] for more details."
+    - Always be warm, helpful, and conversational — never robotic or dismissive.
 
     Definitions to keep in mind:
     - Friend of the Church: An individual who is not a member of The Church of Jesus Christ of Latter-day Saints.
@@ -192,19 +197,30 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
 
     IMPORTANT: Use the block status above to decide what is past/current/future. Any date belonging to a PAST block has already passed — do NOT present it as upcoming. The "next" registration or deadline is for the NEXT block listed above.
 
-    Answer the question as truthfully as possible using the numbered contexts below. If the answer isn't in the text, please say "Sorry, I'm not able to answer this question from the available sources." Please provide a detailed answer. For each sentence in your answer, include a link to the contexts the sentence came from using the format [^context number].
+    Answer the question as truthfully as possible using the numbered contexts below. For each sentence in the answer, include a citation using the format [^context number].
+
+    If the exact answer isn't in the contexts:
+    - Do NOT say "Sorry, I'm not able to answer this question."
+    - Instead, share whatever relevant information IS available in the contexts that comes closest to answering the question.
+    - Mention what specific aspect could not be found, and suggest what the user might be looking for based on the available contexts.
+    - If nothing in the contexts is even remotely related, warmly say something like: "I don't have specific information about that in my sources right now. Is the question perhaps about [nearest related topic from contexts]? I can also try to help if the question is rephrased."
 
     Contexts:
     {context_str}
 
-    Instruction: Based on the above documents, provide a detailed answer for the user question below. Ensure that each statement is clearly cited, e.g., 'This is the answer based on the source [^1]. This is part of the answer [^2]...'
+    Instruction: Based on the above documents, provide a detailed and helpful answer for the user question below. Cite each statement clearly, e.g., 'This is the answer based on the source [^1]. This is part of the answer [^2]...' Be conversational and helpful, not robotic.
     Wording rule: avoid second-person pronouns such as "you" and "your". Prefer "students", "the student", "missionaries", or neutral phrasing.
     """
     
     CONDENSE_PROMPT_TEMPLATE = """
-    Based on the following follow-up question from the user,
-    rephrase it to form a complete, standalone question.
-    
+    Given the following conversation between a user and an AI assistant and a follow-up message from the user,
+    rephrase the follow-up message to be a complete, standalone question that captures the full intent.
+
+    If the user is pushing back (e.g., "Are you sure?", "Really?", "Like what?"), rephrase it as a
+    specific question about the topic they were previously discussing.
+
+    Chat History:
+    {chat_history}
     Follow Up Input: {question}
     Standalone question:"""
 
