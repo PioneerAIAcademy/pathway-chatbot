@@ -238,7 +238,8 @@ class VercelStreamResponse(StreamingResponse):
                     Message(role="assistant", content=final_response, trace_id=trace_id)
                 ]
                 questions = await NextQuestionSuggestion.suggest_next_questions(
-                    conversation
+                    conversation,
+                    source_nodes=resolved_response.source_nodes if resolved_response else None,
                 )
                 if len(questions) > 0:
                     yield cls.convert_data(
