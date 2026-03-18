@@ -625,7 +625,7 @@ async def chat(
             user_language=user_language,
             skip_suggestions=is_suspicious or (calendar_args is not None),
             on_stream_end=_on_stream_end,
-            emit_initial_status=False,
+            emit_initial_status=(calendar_intro is None),
             calendar_pipeline=_calendar_pipeline_fn,
             calendar_intro=calendar_intro,
             supplemental_text_pipeline=_calendar_secondary_text_pipeline,

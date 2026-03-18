@@ -201,7 +201,9 @@ class VercelStreamResponse(StreamingResponse):
                 async for token in resolved_response.async_response_gen():
                     final_response += token
                     token_count += 1
-                    yield cls.convert_text(token)
+                    for chunk in cls._iter_text_chunks(token):
+                        yield cls.convert_text(chunk)
+                        await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
 
                     # Emit calendar patches after introductory text
                     if (
@@ -381,7 +383,9 @@ class VercelStreamResponse(StreamingResponse):
                                 fallback_resp = await rag_fallback()
                                 async for token in fallback_resp.async_response_gen():
                                     final_response += token
-                                    yield cls.convert_text(token)
+                                    for chunk in cls._iter_text_chunks(token):
+                                        yield cls.convert_text(chunk)
+                                        await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
                                 supplemental_source_nodes = list(
                                     getattr(fallback_resp, "source_nodes", []) or []
                                 )
@@ -411,7 +415,9 @@ class VercelStreamResponse(StreamingResponse):
                                 fallback_resp = await rag_fallback()
                                 async for token in fallback_resp.async_response_gen():
                                     final_response += token
-                                    yield cls.convert_text(token)
+                                    for chunk in cls._iter_text_chunks(token):
+                                        yield cls.convert_text(chunk)
+                                        await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
                                 supplemental_source_nodes = list(
                                     getattr(fallback_resp, "source_nodes", []) or []
                                 )
@@ -518,7 +524,9 @@ class VercelStreamResponse(StreamingResponse):
                                 fallback_resp = await rag_fallback()
                                 async for token in fallback_resp.async_response_gen():
                                     final_response += token
-                                    yield cls.convert_text(token)
+                                    for chunk in cls._iter_text_chunks(token):
+                                        yield cls.convert_text(chunk)
+                                        await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
                                 supplemental_source_nodes = list(
                                     getattr(fallback_resp, "source_nodes", []) or []
                                 )

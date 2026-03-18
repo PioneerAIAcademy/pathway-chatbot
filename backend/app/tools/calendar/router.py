@@ -460,6 +460,36 @@ def _normalize_clarification_text(text: str) -> str:
 	return clean
 
 
+_CLARIFICATION_WHITELIST_PATTERN = re.compile(
+	r"\b(?:which|what|should\s+the\s+answer\s+use|"
+	r"year|season|block|term|semester|this\s+term|next\s+term)\b",
+	re.IGNORECASE,
+)
+
+
+def _is_router_clarification(text: str) -> bool:
+	"""Return True only for genuine clarification questions.
+
+	The calendar router occasionally emits generic refusal/helpdesk text when it
+	should defer to RAG. Only allow short, question-shaped clarification prompts.
+	Anything else is treated as non-calendar so normal RAG answers the user.
+	"""
+	clean = (text or "").strip()
+	if not clean:
+		return False
+
+	if len(clean) > 220:
+		return False
+
+	if "?" not in clean:
+		return False
+
+	if not _CLARIFICATION_WHITELIST_PATTERN.search(clean):
+		return False
+
+	return True
+
+
 def _default_year_for_message(user_timezone: str) -> int:
 	try:
 		today = datetime.now(ZoneInfo(user_timezone)).date()
@@ -1063,7 +1093,13 @@ async def detect_calendar_intent_via_llm(
 	text_response = getattr(ai_message, "content", "") or ""
 	if text_response.strip():
 		normalized = _normalize_clarification_text(text_response.strip())
-		logger.info(f"Calendar router clarification: {normalized[:100]}")
-		return None, normalized, False
+		if _is_router_clarification(normalized):
+			logger.info(f"Calendar router clarification: {normalized[:100]}")
+			return None, normalized, False
+		logger.info(
+			"Calendar router returned non-clarification text; deferring to RAG: %s",
+			normalized[:120],
+		)
+		return None, None, False
 
 	return None, None, False
