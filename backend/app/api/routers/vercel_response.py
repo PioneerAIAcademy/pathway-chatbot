@@ -300,7 +300,7 @@ class VercelStreamResponse(StreamingResponse):
                     ):
                         calendar_emitted = True
                         for patch in await _resolve_calendar_patches(
-                            calendar_task, trace_id
+                            calendar_task, trace_id, user_language
                         ):
                             yield patch
 
@@ -312,7 +312,7 @@ class VercelStreamResponse(StreamingResponse):
             # If calendar wasn't emitted during streaming (short response), try now
             if not calendar_emitted and calendar_task is not None:
                 for patch in await _resolve_calendar_patches(
-                    calendar_task, trace_id
+                    calendar_task, trace_id, user_language
                 ):
                     yield patch
 
@@ -550,7 +550,7 @@ class VercelStreamResponse(StreamingResponse):
                                 yield cls.convert_text(chunk)
                                 await asyncio.sleep(TYPEWRITER_CHUNK_DELAY)
 
-                        for patch in _build_calendar_patches(calendar_data, trace_id):
+                        for patch in _build_calendar_patches(calendar_data, trace_id, user_language):
                             yield patch
 
                         post_card_text = str(calendar_data.get("postCardText") or "").strip()
@@ -693,6 +693,7 @@ class VercelStreamResponse(StreamingResponse):
 async def _resolve_calendar_patches(
     calendar_task: asyncio.Task,
     trace_id: str | None,
+    user_language: str | None = None,
 ) -> list[str]:
     """
     Await the calendar pipeline task and return progressive streaming patches.
@@ -758,13 +759,14 @@ async def _resolve_calendar_patches(
         )
         return patches
 
-    patches.extend(_build_calendar_patches(calendar_data, trace_id))
+    patches.extend(_build_calendar_patches(calendar_data, trace_id, user_language))
     return patches
 
 
 def _build_calendar_patches(
     calendar_data: dict,
     trace_id: str | None,
+    user_language: str | None = None,
 ) -> list[str]:
     patches: list[str] = []
 
