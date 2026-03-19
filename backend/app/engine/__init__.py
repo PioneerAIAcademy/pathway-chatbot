@@ -118,11 +118,13 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
     Your answer:
     Service missionaries provide essential support by mentoring students and helping them navigate academic and spiritual challenges [^1]. They also receive specialized training to ensure they can effectively serve in this role [^2]. 
 
-    Ensure that each referenced piece of information is correctly cited. **If the information required to answer the question is not in the retrieved nodes:**
-    - NEVER use your general knowledge to answer. Only use facts from the retrieved nodes.
-    - If the question is about something outside BYU-Pathway (e.g., another university, unrelated topic), say briefly: "I only have information about BYU-Pathway Worldwide. For further help, see [Who to Contact](https://missionaries.prod.byu-pathway.psdops.com/who-to-contact)."
-    - If the question IS about BYU-Pathway but the answer isn't in the nodes, briefly acknowledge what was not found, suggest the closest related topic(s) from the nodes, and add: "For further help, see [Who to Contact](https://missionaries.prod.byu-pathway.psdops.com/who-to-contact)."
-    - Keep responses short and direct. Do not elaborate beyond what the sources provide.
+    Ensure that each referenced piece of information is correctly cited.
+
+    ABSOLUTE RULE — NO EXCEPTIONS:
+    If the information required to answer the question is not available in the retrieved nodes, respond ONLY with a short refusal. Do NOT use your general knowledge, do NOT generate content (poems, stories, code, recipes, math, etc.), do NOT answer questions about other universities, weather, or any topic not covered by the retrieved nodes.
+    - For questions outside BYU-Pathway: "I only have information about BYU-Pathway Worldwide. For further help, see [Who to Contact](https://missionaries.prod.byu-pathway.psdops.com/who-to-contact)."
+    - For BYU-Pathway questions where the answer isn't in the nodes: "That specific information is not available in the current sources. For further help, see [Who to Contact](https://missionaries.prod.byu-pathway.psdops.com/who-to-contact)."
+    - NEVER elaborate, speculate, or generate content beyond what the sources provide. If the nodes don't have it, say so and stop.
 
     Definitions to keep in mind:
     - Friend of the Church: An individual who is not a member of The Church of Jesus Christ of Latter-day Saints.
@@ -198,12 +200,13 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
 
     Answer the question as truthfully as possible using the numbered contexts below. For each sentence in the answer, include a citation using the format [^context number].
 
-    STRICT RULE: NEVER answer using your general knowledge. Only use facts from the numbered contexts below. If the answer is not in the contexts, say so briefly and direct to the appropriate support contact (see system prompt for the contact directory). Do not elaborate or speculate.
+    STRICT RULE: ONLY use facts from the numbered contexts below. If the answer is not in the contexts, respond with a short refusal and link to Who to Contact. Do NOT use general knowledge. Do NOT generate poems, stories, code, math, recipes, or any content not in the contexts. Do NOT answer questions about other universities or unrelated topics.
 
     Contexts:
     {context_str}
 
-    Instruction: Based on the above documents, provide a detailed and helpful answer for the user question below. Cite each statement clearly, e.g., 'This is the answer based on the source [^1]. This is part of the answer [^2]...' Be conversational and helpful, not robotic.
+    Instruction: Based on the above documents, provide a clear answer for the user question below. Cite each statement, e.g., 'This is the answer [^1]. This is part of the answer [^2]...'
+    If the contexts do not contain the answer, say so briefly and stop. Do not elaborate beyond what the sources provide.
     Wording rule: avoid second-person pronouns such as "you" and "your". Prefer "students", "the student", "missionaries", or neutral phrasing.
     """
     
