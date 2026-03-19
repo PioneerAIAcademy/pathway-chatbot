@@ -1,5 +1,5 @@
 """
-Message variations for RAG pipeline status indicators.
+Message variations for pipeline status indicators.
 Provides randomized status messages to avoid repetitive user experience.
 """
 
@@ -15,7 +15,7 @@ RETRIEVAL_MESSAGES = [
 
 # Stage 1: Query understanding messages
 QUERY_MESSAGES = [
-    "Understanding your question...",
+    "Understanding the question...",
     "Interpreting request...",
     "Analyzing query...",
 ]
@@ -43,6 +43,49 @@ RERANKING_MESSAGES = [
     "Evaluating sources...",
 ]
 
+# ── Calendar-specific messages ──────────────────────────────────────
+CALENDAR_RETRIEVAL_MESSAGES = [
+    "Checking academic calendar...",
+    "Looking up dates...",
+    "Searching calendar data...",
+    "Retrieving calendar information...",
+]
+
+GRADUATION_RETRIEVAL_MESSAGES = [
+    "Looking up graduation dates...",
+    "Checking graduation schedule...",
+    "Retrieving graduation information...",
+]
+
+# ── Pushback / re-evaluation messages ───────────────────────────────
+PUSHBACK_MESSAGES = [
+    "Re-examining the request...",
+    "Taking another look...",
+    "Reconsidering...",
+    "Double-checking...",
+    "Reviewing again...",
+]
+
+# ── Text format conversion messages ─────────────────────────────────
+TEXT_FORMAT_MESSAGES = [
+    "Formatting in text...",
+    "Preparing text format...",
+    "Converting to text...",
+]
+
+# ── Calendar pipeline stage messages (multi-step status) ────────────
+CALENDAR_EXTRACTION_MESSAGES = [
+    "Extracting dates and deadlines...",
+    "Analyzing calendar data...",
+    "Parsing calendar entries...",
+]
+
+CALENDAR_BUILDING_MESSAGES = [
+    "Preparing calendar card...",
+    "Building calendar view...",
+    "Assembling calendar display...",
+]
+
 
 def get_retrieval_start_message() -> str:
     """Returns a random retrieval start message."""
@@ -67,3 +110,33 @@ def get_llm_message() -> str:
 def get_reranking_message() -> str:
     """Returns a random reranking message (for future use)."""
     return random.choice(RERANKING_MESSAGES)
+
+
+def get_calendar_retrieval_message() -> str:
+    """Returns a random calendar-specific retrieval message."""
+    return random.choice(CALENDAR_RETRIEVAL_MESSAGES)
+
+
+def get_graduation_retrieval_message() -> str:
+    """Returns a random graduation-specific retrieval message."""
+    return random.choice(GRADUATION_RETRIEVAL_MESSAGES)
+
+
+def get_pushback_message() -> str:
+    """Returns a random pushback / re-evaluation message."""
+    return random.choice(PUSHBACK_MESSAGES)
+
+
+def get_text_format_message() -> str:
+    """Returns a random text format conversion message."""
+    return random.choice(TEXT_FORMAT_MESSAGES)
+
+
+def get_calendar_extraction_message() -> str:
+    """Returns a random calendar extraction message."""
+    return random.choice(CALENDAR_EXTRACTION_MESSAGES)
+
+
+def get_calendar_building_message() -> str:
+    """Returns a random calendar building message."""
+    return random.choice(CALENDAR_BUILDING_MESSAGES)

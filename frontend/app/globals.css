@@ -46,6 +46,13 @@
     --input-text: 220 3% 8%; /* #141413 Cod Gray - dark text */
     --input-border: 220 3% 88%; /* Light border for input */
     --reference-badge: 20 68% 61%; /* #E18158 */
+    --date-chip-text: 8 72% 40%; /* darker red text for stronger light-mode contrast */
+    --date-chip-border: #b1b0af; /* lighter than #646362 for light mode */
+
+    /* External link colors */
+    --link: 213 94% 42%; /* #0551A5 — accessible blue for light backgrounds */
+    --link-hover: 213 94% 32%; /* darker on hover */
+    --link-visited: 271 60% 40%; /* muted purple for visited */
 
     /* Theme transition (used by SettingsMenu) */
     --theme-transition-duration: 1200ms;
@@ -95,6 +102,13 @@
     --input-bg: 240 3% 16%; /* #242628 Shark */
     --input-text: 0 0% 71%; /* #B5B5B5 Nobel */
     --reference-badge: 20 68% 61%; /* #E18158 */
+    --date-chip-text: 10 72% 66%; /* balanced red for dark mode */
+    --date-chip-border: #646362;
+
+    /* External link colors */
+    --link: 210 100% 70%; /* #66B3FF — accessible blue for dark backgrounds */
+    --link-hover: 210 100% 80%; /* lighter on hover */
+    --link-visited: 271 60% 72%; /* lighter purple for visited */
   }
 }
 
@@ -216,5 +230,16 @@
     overflow-wrap: anywhere;
     word-break: break-word;
     hyphens: auto;
+  }
+}
+
+/* Date chip responsive sizing — desktop 15px, mobile 12.5px */
+.date-chip {
+  font-size: 15px;
+}
+@media (max-width: 480px) {
+  .date-chip {
+    font-size: 12.5px;
+    padding: 1px 4.5px;
   }
 }

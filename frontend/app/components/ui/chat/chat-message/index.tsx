@@ -1,11 +1,14 @@
-import { Check, Copy, RefreshCw, Pencil } from "lucide-react";
+import { AlertTriangle, Check, Copy, RefreshCw, Pencil } from "lucide-react";
 
 import { Message } from "ai";
 import { Fragment, useState } from "react";
 import { Button } from "../../button";
 import { useCopyToClipboard } from "../hooks/use-copy-to-clipboard";
 import {
+  CalendarCardData,
+  CalendarCardState,
   ChatHandler,
+  DateSpansData,
   DocumentFileData,
   EventData,
   ImageData,
@@ -13,7 +16,6 @@ import {
   MessageAnnotationType,
   SuggestedQuestionsData,
   ToolData,
-  UserLanguageData,
   getAnnotationData,
   getSourceAnnotationData,
 } from "../index";
@@ -24,6 +26,7 @@ import { ChatImage } from "./chat-image";
 import { ChatSources } from "./chat-sources";
 import { SuggestedQuestions } from "./chat-suggestedQuestions";
 import ChatTools from "./chat-tools";
+import { CalendarCard } from "../widgets/CalendarCard";
 import Markdown from "./markdown";
 import { UserFeedbackComponent } from "./UserFeedbackComponent";
 
@@ -31,6 +34,38 @@ type ContentDisplayConfig = {
   order: number;
   component: JSX.Element | null;
 };
+
+function CalendarErrorNotice({
+  reason,
+}: {
+  reason?: string;
+}) {
+  const title =
+    reason === "timeout"
+      ? "Calendar is taking longer than expected"
+      : "I couldn't load the calendar just now";
+
+  const message =
+    reason === "timeout"
+      ? "This sometimes happens with slow connections. You can try asking again."
+      : "You can try asking your calendar question again, or ask me in a different way.";
+
+  return (
+    <div className="self-start inline-block w-fit max-w-full rounded-xl border border-amber-500/35 bg-amber-500/8 dark:bg-amber-500/10 px-4 py-3">
+      <div className="flex items-start gap-2.5">
+        <AlertTriangle className="w-4 h-4 mt-0.5 text-amber-600 dark:text-amber-400 shrink-0" />
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold text-amber-700 dark:text-amber-300">
+            {title}
+          </div>
+          <p className="text-[12px] text-amber-800/90 dark:text-amber-200/90 mt-0.5">
+            {message}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ChatMessageContent({
   message,
@@ -42,6 +77,7 @@ function ChatMessageContent({
   append: Pick<ChatHandler, "append">["append"];
 }) {
   const annotations = message.annotations as MessageAnnotation[] | undefined;
+
   if (!annotations?.length) return <Markdown content={message.content} />;
 
 
@@ -68,10 +104,116 @@ function ChatMessageContent({
     annotations,
     MessageAnnotationType.SUGGESTED_QUESTIONS,
   );
-  const userLanguageData = getAnnotationData<UserLanguageData>(
+  // Legacy full-blob calendar support
+  const calendarData = getAnnotationData<CalendarCardData>(
     annotations,
-    MessageAnnotationType.USER_LANGUAGE,
+    MessageAnnotationType.CALENDAR,
   );
+
+  // Progressive calendar patches
+  const calSkeleton = getAnnotationData<{ cardType?: string }>(
+    annotations,
+    MessageAnnotationType.CALENDAR_SKELETON,
+  );
+  const calHeader = getAnnotationData<{
+    title: string;
+    subtitle: string;
+    status: CalendarCardData["status"];
+    type: CalendarCardData["type"];
+  }>(annotations, MessageAnnotationType.CALENDAR_HEADER);
+  const calSpotlight = getAnnotationData<NonNullable<CalendarCardData["spotlight"]>>(
+    annotations,
+    MessageAnnotationType.CALENDAR_SPOTLIGHT,
+  );
+  const calTimeline = getAnnotationData<{
+    events: CalendarCardData["events"];
+    tabs: CalendarCardData["tabs"];
+  }>(annotations, MessageAnnotationType.CALENDAR_TIMELINE);
+  const calFooter = getAnnotationData<{
+    sourceUrl: string;
+    suggestedQuestions: string[];
+    footnote?: string;
+    textFormatOffer?: string;
+  }>(annotations, MessageAnnotationType.CALENDAR_FOOTER);
+
+  // Check for calendar error (pipeline failed/timed out — dismiss skeleton)
+  const calError = getAnnotationData<{ reason: string }>(
+    annotations,
+    MessageAnnotationType.CALENDAR_ERROR,
+  );
+  const hasCalendarError = calError.length > 0;
+  const lowerContent = (message.content || "").trim().toLowerCase();
+  const isGenericFailureCopy =
+    lowerContent === "sorry, i don't know." ||
+    lowerContent === "sorry, i do not know." ||
+    lowerContent.startsWith("i'm sorry, but i can't assist with that request");
+  const hasSubstantiveText =
+    lowerContent.length > 0 && !isGenericFailureCopy;
+  const shouldShowCalendarErrorNotice =
+    hasCalendarError && !hasSubstantiveText;
+  const shouldHideMarkdownForCalendarError =
+    hasCalendarError && isGenericFailureCopy;
+
+  // Assemble progressive state from whatever patches have arrived
+  let calendarState: CalendarCardState | undefined;
+
+  if (hasCalendarError) {
+    // Pipeline failed — don't show skeleton or card
+    calendarState = undefined;
+  } else if (calFooter.length > 0) {
+    calendarState = {
+      phase: "complete",
+      ...calHeader[0],
+      spotlight: calSpotlight[0],
+      ...calTimeline[0],
+      ...calFooter[0],
+    };
+  } else if (calTimeline.length > 0) {
+    calendarState = {
+      phase: "timeline",
+      ...calHeader[0],
+      spotlight: calSpotlight[0],
+      ...calTimeline[0],
+    };
+  } else if (calSpotlight.length > 0) {
+    calendarState = {
+      phase: "spotlight",
+      ...calHeader[0],
+      spotlight: calSpotlight[0],
+    };
+  } else if (calHeader.length > 0) {
+    calendarState = { phase: "header", ...calHeader[0] };
+  } else if (calSkeleton.length > 0) {
+    calendarState = {
+      phase: "skeleton",
+      type: (calSkeleton[0]?.cardType as CalendarCardData["type"]) ?? "block",
+    };
+  }
+
+  const dateSpansData = getAnnotationData<DateSpansData>(
+    annotations,
+    MessageAnnotationType.DATE_SPANS,
+  );
+
+  const hasCalendarContent =
+    shouldShowCalendarErrorNotice ||
+    Boolean(calendarData[0]) ||
+    Boolean(calendarState);
+
+  const rawCalendarText = (message.content || "").trim();
+  let calendarIntroText = rawCalendarText;
+  let calendarPostText = "";
+  if (hasCalendarContent && rawCalendarText) {
+    const parts = rawCalendarText
+      .split(/\n{2,}/)
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0);
+
+    if (parts.length > 1) {
+      calendarIntroText = parts[0];
+      calendarPostText = parts.slice(1).join("\n\n");
+    }
+  }
 
   const contents: ContentDisplayConfig[] = [
     {
@@ -101,7 +243,30 @@ function ChatMessageContent({
     },
     {
       order: 0,
-      component: <Markdown content={message.content} sources={sourceData[0]} />,
+      component: shouldHideMarkdownForCalendarError ? null : (
+        <Markdown
+          content={hasCalendarContent ? calendarIntroText : message.content}
+          sources={sourceData[0]}
+          dateSpans={dateSpansData[0]}
+        />
+      ),
+    },
+    {
+      order: 0.5,
+      component: shouldShowCalendarErrorNotice ? (
+        <CalendarErrorNotice reason={calError[0]?.reason} />
+      ) : calendarData[0] ? (
+        <CalendarCard data={calendarData[0]} append={append} />
+      ) : calendarState ? (
+        <CalendarCard state={calendarState} append={append} />
+      ) : null,
+    },
+    {
+      order: 0.6,
+      component:
+        hasCalendarContent && calendarPostText && !shouldHideMarkdownForCalendarError ? (
+          <Markdown content={calendarPostText} sources={sourceData[0]} />
+        ) : null,
     },
     {
       order: 3,
@@ -195,7 +360,7 @@ export default function ChatMessage({
     <div className={`flex flex-col gap-2 ${isUser ? 'items-end' : 'items-start'}`}>
       {/* User message - dark bubble on right */}
       {isUser && (
-        <div className={`group flex flex-col items-end gap-2 ${isEditing ? 'w-full max-w-[90%] sm:max-w-[576px]' : ''}`}>
+        <div className={`group flex flex-col items-end gap-1 ${isEditing ? 'w-full max-w-[90%] sm:max-w-[576px]' : 'max-w-[90%] sm:max-w-[576px]'}`}>
           {isEditing ? (
             /* Edit mode - inline textarea with full width */
             <div className="w-full bg-[#F0EEE6] dark:bg-[#2a2a2a] border border-[rgba(31,30,29,0.15)] dark:border-[rgba(252,252,252,0.1)] rounded-2xl p-4">
@@ -230,8 +395,8 @@ export default function ChatMessage({
           ) : (
             /* Normal message display - hugs content */
             <>
-              <div className="bg-[#E9E7E1] dark:bg-[#242628] text-[#3D3D3A] dark:text-[#FCFCFC] px-4 sm:px-[17px] py-3 sm:py-[11px] rounded-[24px] rounded-br-[8px] max-w-[90%] sm:max-w-[576px] border border-[rgba(31,30,29,0.12)] dark:border-[rgba(252,252,252,0.06)] overflow-wrap-anywhere">
-                <p className="text-sm sm:text-[15.75px] leading-[24px] sm:leading-[28px] tracking-[-0.1px] break-words overflow-wrap-anywhere">{chatMessage.content}</p>
+              <div className="bg-[#E9E7E1] dark:bg-[#242628] text-[#3D3D3A] dark:text-[#FCFCFC] px-4 sm:px-[17px] py-3 sm:py-[11px] rounded-[24px] rounded-br-[8px] border border-[rgba(31,30,29,0.12)] dark:border-[rgba(252,252,252,0.06)]">
+                <p className="text-sm sm:text-[15.75px] leading-[24px] sm:leading-[28px] tracking-[-0.1px] break-words">{chatMessage.content}</p>
               </div>
               
               {/* Action buttons for user message - only visible on hover */}

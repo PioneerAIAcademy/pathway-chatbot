@@ -4,8 +4,10 @@ import ReactMarkdown, { Options } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { ReactNode } from "react";
+import { CSSProperties } from "react";
 
-import { SourceData } from "..";
+import { DateSpansData, SourceData } from "..";
 import { SourceNumberButton } from "./chat-sources";
 import { CodeBlock } from "./codeblock";
 
@@ -98,24 +100,210 @@ const preprocessCitations = (content: string, sources?: SourceData) => {
   return content;
 };
 
+const promoteCalendarSubheaders = (content: string) => {
+  return content
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+
+      if (trimmed.startsWith("#")) {
+        return line;
+      }
+
+      if (/^Block\/Term\s+\d+\s*$/i.test(trimmed)) {
+        return `### ${trimmed}`;
+      }
+
+      return line;
+    })
+    .join("\n");
+};
+
 const preprocessContent = (content: string, sources?: SourceData) => {
   return preprocessCitations(
     preprocessFootnoteCitations(
-      preprocessMedia(preprocessLaTeX(content)),
+      promoteCalendarSubheaders(preprocessMedia(preprocessLaTeX(content))),
       sources,
     ),
     sources,
   );
 };
 
+const DATE_PATTERN = new RegExp(
+  [
+    "\\b(?:Mon(?:day)?|Tue(?:s(?:day)?)?|Wed(?:nesday)?|Thu(?:r(?:s(?:day)?)?)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?),?\\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{1,2}(?:,\\s*\\d{4})?\\b",
+    "\\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{1,2}(?:,\\s*\\d{4})?\\b",
+    "\\b(?:\\p{L}+,\\s*)?\\d{1,2}\\s+de\\s+\\p{L}+\\s+de\\s+\\d{4}\\b",
+    "\\b(?:\\p{L}+,\\s*)?\\d{1,2}\\s+\\p{L}+\\s+\\d{4}\\b",
+    "\\b\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}\\b",
+    "\\b\\d{4}-\\d{2}-\\d{2}\\b",
+  ].join("|"),
+  "giu",
+);
+
+const DATE_CHIP_CLASSNAME =
+  "date-chip inline-block align-baseline border rounded-[5px]";
+
+const DATE_CHIP_STYLE: CSSProperties = {
+  background: "hsl(var(--chat-bg))",
+  color: "hsl(var(--date-chip-text))",
+  borderColor: "var(--date-chip-border)",
+  borderWidth: "1px",
+  borderStyle: "solid",
+  borderRadius: "5px",
+  padding: "1.5px 6px",
+  fontFamily:
+    "'Söhne Mono', ui-monospace, 'SFMono-Regular', 'Cascadia Code', monospace",
+  lineHeight: 1.2,
+  letterSpacing: "0.01em",
+  fontWeight: 800,
+  whiteSpace: "nowrap",
+};
+
+const escapeRegExp = (value: string): string => {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+};
+
+const highlightDateText = (text: string): ReactNode[] => {
+  const matches = Array.from(text.matchAll(DATE_PATTERN));
+  if (matches.length === 0) {
+    return [text];
+  }
+
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+
+  matches.forEach((match, index) => {
+    const matched = match[0];
+    const start = match.index ?? -1;
+    if (!matched || start < cursor) {
+      return;
+    }
+
+    if (start > cursor) {
+      parts.push(text.slice(cursor, start));
+    }
+
+    parts.push(
+      <span
+        key={`date-${start}-${index}`}
+        className={DATE_CHIP_CLASSNAME}
+        style={DATE_CHIP_STYLE}
+      >
+        {matched}
+      </span>,
+    );
+    cursor = start + matched.length;
+  });
+
+  if (cursor < text.length) {
+    parts.push(text.slice(cursor));
+  }
+
+  return parts;
+};
+
+const highlightDatePhrases = (text: string, phrases: string[]): ReactNode[] => {
+  if (!text || phrases.length === 0) {
+    return [text];
+  }
+
+  const escaped = phrases
+    .map((phrase) => phrase.trim())
+    .filter((phrase) => phrase.length > 0)
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRegExp);
+
+  if (escaped.length === 0) {
+    return [text];
+  }
+
+  const phraseRegex = new RegExp(`(${escaped.join("|")})`, "giu");
+  const segments = text.split(phraseRegex);
+  const normalizedPhraseSet = new Set(
+    phrases.map((phrase) => phrase.trim().toLocaleLowerCase()),
+  );
+
+  return segments
+    .filter((segment) => segment.length > 0)
+    .map((segment, index) => {
+      const isDate = normalizedPhraseSet.has(segment.trim().toLocaleLowerCase());
+      if (!isDate) {
+        return <span key={`date-text-${index}`}>{segment}</span>;
+      }
+
+      return (
+        <span
+          key={`date-phrase-${index}`}
+          className={DATE_CHIP_CLASSNAME}
+          style={DATE_CHIP_STYLE}
+        >
+          {segment}
+        </span>
+      );
+    });
+};
+
+const highlightDatesInChildren = (
+  children: ReactNode,
+  phrases: string[],
+): ReactNode => {
+  if (typeof children === "string") {
+    return phrases.length > 0
+      ? highlightDatePhrases(children, phrases)
+      : highlightDateText(children);
+  }
+
+  if (Array.isArray(children)) {
+    return children.map((child, index) => {
+      if (typeof child === "string") {
+        return (
+          <span key={`date-text-${index}`}>
+            {phrases.length > 0
+              ? highlightDatePhrases(child, phrases)
+              : highlightDateText(child)}
+          </span>
+        );
+      }
+      return child;
+    });
+  }
+
+  return children;
+};
+
 export default function Markdown({
   content,
   sources,
+  dateSpans,
 }: {
   content: string;
   sources?: SourceData;
+  dateSpans?: DateSpansData;
 }) {
   const processedContent = preprocessContent(content, sources);
+  const normalizedDatePhrases = useMemo(() => {
+    if (!dateSpans?.phrases?.length) {
+      return [] as string[];
+    }
+
+    const seen = new Set<string>();
+    const uniquePhrases: string[] = [];
+    for (const phrase of dateSpans.phrases) {
+      const value = (phrase || "").trim();
+      if (!value) {
+        continue;
+      }
+      const key = value.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      uniquePhrases.push(value);
+    }
+
+    return uniquePhrases;
+  }, [dateSpans?.phrases]);
 
   // Create sorted sources array to match chat-sources.tsx display order
   const sortedSources = useMemo(() => 
@@ -141,7 +329,28 @@ export default function Markdown({
       rehypePlugins={[rehypeKatex as any]}
       components={{
         p({ children }) {
-          return <p className="mb-2 last:mb-0">{children}</p>;
+          return (
+            <p className="mb-2 last:mb-0">
+              {highlightDatesInChildren(children, normalizedDatePhrases)}
+            </p>
+          );
+        },
+        h2({ children }) {
+          return (
+            <h2 className="mt-5 mb-2 text-[22px] sm:text-[24px] leading-[1.2] font-semibold tracking-[-0.2px]">
+              {highlightDatesInChildren(children, normalizedDatePhrases)}
+            </h2>
+          );
+        },
+        h3({ children }) {
+          return (
+            <h3 className="mt-4 mb-2 text-[20px] sm:text-[22px] leading-[1.25] font-semibold tracking-[-0.2px]">
+              {highlightDatesInChildren(children, normalizedDatePhrases)}
+            </h3>
+          );
+        },
+        li({ children }) {
+          return <li>{highlightDatesInChildren(children, normalizedDatePhrases)}</li>;
         },
         code({ node, inline, className, children, ...props }) {
           if (children.length) {
@@ -189,7 +398,15 @@ export default function Markdown({
               return <></>;
             }
           }
-          return <a href={href}>{children}</a>;
+          return (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {children}
+            </a>
+          );
         },
       }}
     >

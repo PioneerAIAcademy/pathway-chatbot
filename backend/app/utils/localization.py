@@ -215,10 +215,11 @@ class LocalizationManager:
             
             # Additional English pattern check for ambiguous cases
             english_patterns = [
-                r'\b(when|what|where|why|how|who|is|are|can|could|would|will|do|does|did)\b',
+                r'\b(when|wen|what|wut|where|why|how|who|is|are|can|could|would|will|do|does|did)\b',
                 r'\b(the|a|an|and|or|but|in|on|at|to|for|of|with|by)\b',
                 r'\b(I|you|he|she|it|we|they|me|him|her|us|them)\b',
-                r'\b(this|that|these|those|here|there|now|then)\b'
+                r'\b(this|that|these|those|here|there|now|then)\b',
+                r'\b(block|term|semester|registration|deadline|payment|grades?|calendar)\b',
             ]
             
             english_indicators = sum(1 for pattern in english_patterns if re.search(pattern, clean_text, re.IGNORECASE))

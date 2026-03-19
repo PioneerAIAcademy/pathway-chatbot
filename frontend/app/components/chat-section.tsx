@@ -3,11 +3,12 @@
 import * as Sentry from "@sentry/nextjs";
 import { useChat } from "ai/react";
 import { useState, useEffect, useRef } from "react";
+import { AlertTriangle, X } from "lucide-react";
 import DisclaimerMessage from "./disclaimer-message";
 import Greeting from "./greeting";
 import { ChatInput, ChatMessages } from "./ui/chat";
 import { useClientConfig } from "./ui/chat/hooks/use-config";
-import { getSessionId, getDeviceId } from "../utils/session";
+import { getSessionId, getDeviceId, getTimezone } from "../utils/session";
 
 export default function ChatSection() {
   const { backend } = useClientConfig();
@@ -41,23 +42,25 @@ export default function ChatSection() {
       "Content-Type": "application/json",
       "X-Session-ID": getSessionId(),
       "X-Device-ID": deviceId,
+      "X-Timezone": getTimezone(),
       "X-API-Key": process.env.NEXT_PUBLIC_API_KEY ?? "",
     },
     onError: (error: unknown) => {
       if (!(error instanceof Error)) throw error;
-      let userMessage = "Something went wrong. Please try again.";
+      // Always show a friendly message — never expose raw errors to the user
+      const friendlyMessage = "Something went wrong. Please try again.";
+      // Extract raw detail for Sentry diagnostics only
+      let rawDetail = error.message;
       try {
         const parsed = JSON.parse(error.message);
-        userMessage = parsed.detail ?? error.message;
+        rawDetail = parsed.detail ?? error.message;
       } catch {
-        userMessage = error.message;
+        // error.message is not JSON — use as-is for Sentry
       }
-      // Report to Sentry for monitoring (silent — user never sees this)
       Sentry.captureException(error, {
-        extra: { userMessage },
+        extra: { rawDetail },
       });
-      // Show inline error instead of blocking alert
-      setChatError(userMessage);
+      setChatError(friendlyMessage);
     },
   });
 
@@ -127,17 +130,33 @@ export default function ChatSection() {
         </div>
       )}
 
-      {/* Inline error banner */}
+      {/* Compact centered error banner */}
       {chatError && (
-        <div className="mx-4 md:mx-8 lg:mx-16 xl:mx-24 2xl:mx-32 mb-2 px-4 py-2 rounded-md bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 flex items-center justify-between gap-2">
-          <p className="text-sm text-red-600 dark:text-red-400">{chatError}</p>
-          <button
-            onClick={() => setChatError(null)}
-            className="text-red-400 hover:text-red-600 dark:hover:text-red-300 text-lg leading-none"
-            aria-label="Dismiss error"
+        <div className="flex justify-center mb-2 px-4">
+          <div
+            className={[
+              "relative overflow-hidden",
+              "flex items-center gap-2.5 rounded-xl px-4 py-2.5 border",
+              "bg-white/95 backdrop-blur-md border-red-300 text-[#3D3D3A]",
+              "shadow-[0_12px_36px_rgba(0,0,0,0.12)]",
+              "ring-1 ring-red-200/60",
+              "dark:bg-[#242628] dark:border-red-800/60 dark:text-[#FCFCFC]",
+              "dark:shadow-[0_14px_40px_rgba(0,0,0,0.45)]",
+              "dark:ring-red-900/30",
+              "before:content-[''] before:absolute before:left-0 before:top-0 before:h-full before:w-1.5 before:bg-red-500",
+              "animate-error-slide-in",
+            ].join(" ")}
           >
-            ×
-          </button>
+            <AlertTriangle className="h-4 w-4 text-red-500 dark:text-red-400 flex-shrink-0" />
+            <p className="text-xs sm:text-sm font-medium">{chatError}</p>
+            <button
+              onClick={() => setChatError(null)}
+              className="text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 transition-colors flex-shrink-0"
+              aria-label="Dismiss error"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
       )}
 

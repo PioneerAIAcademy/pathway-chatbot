@@ -12,8 +12,15 @@ export enum MessageAnnotationType {
   SOURCES = "sources",
   EVENTS = "events",
   TOOLS = "tools",
+  CALENDAR = "calendar",
+  CALENDAR_SKELETON = "calendar_skeleton",
+  CALENDAR_HEADER = "calendar_header",
+  CALENDAR_SPOTLIGHT = "calendar_spotlight",
+  CALENDAR_TIMELINE = "calendar_timeline",
+  CALENDAR_FOOTER = "calendar_footer",
+  CALENDAR_ERROR = "calendar_error",
+  DATE_SPANS = "date_spans",
   SUGGESTED_QUESTIONS = "suggested_questions",
-  LANGFUSE_TRACE_ID = 'langfuse_trace_id',
   USER_LANGUAGE = "user_language",
 }
 
@@ -72,10 +79,67 @@ export type ToolData = {
   };
 };
 
+export type CalendarEvent = {
+  date: string;
+  name: string;
+  description?: string;
+  status: "past" | "today" | "soon" | "upcoming";
+  countdown?: string;
+  section?: string;
+};
+
+export type CalendarCardData = {
+  type: "block" | "semester" | "deadline" | "graduation";
+  title: string;
+  subtitle: string;
+  status: "active" | "upcoming" | "past";
+  spotlight?: {
+    urgency: "urgent" | "warning" | "info" | "calm";
+    date: string;
+    title: string;
+    description: string;
+    countdown: string;
+  };
+  events: CalendarEvent[];
+  tabs?: { label: string; active: boolean; events?: CalendarEvent[] }[];
+  sourceUrl: string;
+  suggestedQuestions: string[];
+  footnote?: string;
+  textFormatOffer?: string;
+};
+
+export type CalendarCardPhase =
+  | "skeleton"
+  | "header"
+  | "spotlight"
+  | "timeline"
+  | "footer"
+  | "complete";
+
+export type CalendarCardState = {
+  phase: CalendarCardPhase;
+  type?: CalendarCardData["type"];
+  title?: string;
+  subtitle?: string;
+  status?: CalendarCardData["status"];
+  spotlight?: CalendarCardData["spotlight"];
+  events?: CalendarEvent[];
+  tabs?: CalendarCardData["tabs"];
+  sourceUrl?: string;
+  suggestedQuestions?: string[];
+  footnote?: string;
+  textFormatOffer?: string;
+};
+
 export type SuggestedQuestionsData = string[];
 
 export type UserLanguageData = {
   language: string;
+};
+
+export type DateSpansData = {
+  phrases: string[];
+  language?: string;
 };
 
 export type AnnotationData =
@@ -84,6 +148,8 @@ export type AnnotationData =
   | SourceData
   | EventData
   | ToolData
+  | CalendarCardData
+  | DateSpansData
   | SuggestedQuestionsData
   | UserLanguageData;
 
@@ -93,16 +159,7 @@ export type MessageAnnotation = {
   trace_id?: string;
 };
 
-const NODE_SCORE_THRESHOLD = 0.25;
-
-export function getLangfuseTraceId(
-  annotations: MessageAnnotation[],
-  type: MessageAnnotationType
-): any {
-  return annotations.find((annotation) => annotation.type === type);
-}
-
-export function getAnnotationData<T extends AnnotationData>(
+export function getAnnotationData<T>(
   annotations: MessageAnnotation[],
   type: MessageAnnotationType,
 ): T[] {
@@ -128,7 +185,6 @@ export function getSourceAnnotationData(
 function preprocessSourceNodes(nodes: SourceNode[]): SourceNode[] {
   // Filter source nodes has lower score
   nodes = nodes
-    // .filter((node) => (node.score ?? 1) > NODE_SCORE_THRESHOLD)
     .filter((node) => isValidUrl(node.url))
     .sort((a, b) => (b.score ?? 1) - (a.score ?? 1))
     .map((node) => {

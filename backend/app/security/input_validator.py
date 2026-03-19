@@ -41,6 +41,40 @@ class InputValidator:
     
     # Maximum allowed character length based on analysis (99% of legitimate questions)
     MAX_QUESTION_LENGTH = 2000
+
+    # BYU-Pathway vocabulary used to bypass known Pytector false positives.
+    # Includes English, Spanish, Portuguese, and French terms since pytector
+    # frequently false-flags non-English academic questions.
+    CALENDAR_TERMS = [
+        # English
+        "academic calendar", "calendar", "deadline", "deadlines",
+        "block", "term", "semester", "registration",
+        "priority registration", "application", "add course",
+        "drop", "auto-drop", "refund", "payment",
+        "late fee", "late fees", "withdraw", "grades",
+        "tuition discount", "hold", "holds", "financial hold",
+        "graduation", "commencement",
+        # Spanish
+        "inscripción", "inscripcion", "registro", "bloque",
+        "semestre", "calendario", "beca", "calificaciones",
+        "matrícula", "matricula", "pago", "reembolso",
+        "graduación", "graduacion", "curso", "plazo",
+        # Portuguese
+        "inscrição", "inscricao", "matrícula", "bloco",
+        "bolsa", "notas", "pagamento", "reembolso",
+        "formatura", "prazo",
+        # French
+        "inscription", "bloc", "bourse", "notes",
+        "paiement", "remboursement", "diplôme",
+    ]
+
+    # General BYU-Pathway terms (any language) for broader false-positive bypass
+    PATHWAY_TERMS = [
+        "byu", "pathway", "canvas", "gathering", "missionary",
+        "mentor", "student", "institute", "englishconnect",
+        "pathwayconnect", "grievance", "enrollment",
+        "misionero", "estudiante", "aluno", "missionnaire",
+    ]
     
     # Default pytector instance for reuse (lazy initialization)
     _pytector_detector = None
@@ -391,6 +425,45 @@ class InputValidator:
             return RiskLevel.MEDIUM
         else:
             return RiskLevel.LOW
+
+
+    @classmethod
+    def _is_pytector_false_positive(
+        cls,
+        risk_level: RiskLevel,
+        risk_score: int,
+        details: Dict[str, Any],
+    ) -> bool:
+        """Check if the hit is only from pytector + optional special_char_ratio (non-English text)."""
+        if risk_level != RiskLevel.MEDIUM:
+            return False
+        patterns = details.get("detected_patterns", [])
+        # Allow pytector-only or pytector + special_char_ratio (common for accented languages)
+        real_patterns = [p for p in patterns if p != "high_special_char_ratio"]
+        if len(real_patterns) != 1:
+            return False
+        return str(real_patterns[0]).startswith("pytector_ml_detection")
+
+    @classmethod
+    def _looks_like_pathway_request(cls, input_text: str) -> bool:
+        """Check if input contains BYU-Pathway or calendar vocabulary in any supported language."""
+        text = (input_text or "").lower()
+        if not text.strip():
+            return False
+        return any(term in text for term in cls.CALENDAR_TERMS) or \
+               any(term in text for term in cls.PATHWAY_TERMS)
+
+    @classmethod
+    def _allow_calendar_false_positive(
+        cls,
+        input_text: str,
+        risk_level: RiskLevel,
+        risk_score: int,
+        details: Dict[str, Any],
+    ) -> bool:
+        return cls._is_pytector_false_positive(
+            risk_level, risk_score, details
+        ) and cls._looks_like_pathway_request(input_text)
     
     @classmethod
     async def validate_input_security_async(cls, input_text: str) -> Tuple[bool, str, Dict[str, Any]]:
@@ -427,6 +500,20 @@ class InputValidator:
         if is_suspicious:
             details["risk_level"] = risk_level.value
             details["is_suspicious"] = True
+
+            # Allowlist only narrow false-positive class:
+            # pytector-only medium hit on clear calendar phrasing.
+            if cls._allow_calendar_false_positive(
+                input_text, risk_level, risk_score, details
+            ):
+                details["is_suspicious"] = False
+                details["risk_level"] = "LOW"
+                details["reason"] = "calendar_pytector_false_positive_override"
+                logger.info(
+                    "Security override applied for likely calendar request "
+                    "(pytector-only medium false positive)"
+                )
+                return False, "", details
             
             # Block MEDIUM and CRITICAL risk inputs
             if risk_level in [RiskLevel.MEDIUM, RiskLevel.CRITICAL]:
@@ -477,6 +564,20 @@ class InputValidator:
         if is_suspicious:
             details["risk_level"] = risk_level.value
             details["is_suspicious"] = True
+
+            # Allowlist only narrow false-positive class:
+            # pytector-only medium hit on clear calendar phrasing.
+            if cls._allow_calendar_false_positive(
+                input_text, risk_level, risk_score, details
+            ):
+                details["is_suspicious"] = False
+                details["risk_level"] = "LOW"
+                details["reason"] = "calendar_pytector_false_positive_override"
+                logger.info(
+                    "Security override applied for likely calendar request "
+                    "(pytector-only medium false positive)"
+                )
+                return False, "", details
             
             # Block MEDIUM and CRITICAL risk inputs
             if risk_level in [RiskLevel.MEDIUM, RiskLevel.CRITICAL]:

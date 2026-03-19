@@ -1,0 +1,496 @@
+/* ============================================
+   CalendarCard — Animated reveal & theme styles
+   ============================================ */
+
+/* --- Card container ---
+   Fades in on mount. The card never unmounts once it
+   appears — content transitions happen in-place inside. */
+.card {
+  position: relative;
+  opacity: 0;
+  animation: cardAppear 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+@keyframes cardAppear {
+  to {
+    opacity: 1;
+  }
+}
+
+/* -----------------------------------------------
+   Card frame line-drawing
+   Six 1px lines draw the card border from center
+   outward: top → sides → bottom. Triggered by the
+   .ready class (set one frame after mount).
+   ----------------------------------------------- */
+.cardFrame {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  border-radius: inherit;
+  overflow: hidden;
+}
+
+.frameLine {
+  position: absolute;
+  display: block;
+  background: rgba(0, 0, 0, 0.18);
+  will-change: transform;
+}
+
+:global(.dark) .frameLine {
+  background: rgba(255, 255, 255, 0.32);
+}
+
+.topLeft,
+.topRight,
+.bottomLeft,
+.bottomRight {
+  height: 1px;
+  width: 50%;
+}
+
+.sideLeft,
+.sideRight {
+  width: 1px;
+  height: 100%;
+  top: 0;
+}
+
+.topLeft {
+  top: 0;
+  left: 0;
+  transform-origin: right;
+  transform: scaleX(0);
+}
+
+.topRight {
+  top: 0;
+  right: 0;
+  transform-origin: left;
+  transform: scaleX(0);
+}
+
+.sideLeft {
+  left: 0;
+  transform-origin: top;
+  transform: scaleY(0);
+}
+
+.sideRight {
+  right: 0;
+  transform-origin: top;
+  transform: scaleY(0);
+}
+
+.bottomLeft {
+  left: 0;
+  bottom: 0;
+  transform-origin: left;
+  transform: scaleX(0);
+}
+
+.bottomRight {
+  right: 0;
+  bottom: 0;
+  transform-origin: right;
+  transform: scaleX(0);
+}
+
+.ready .topLeft,
+.ready .topRight {
+  animation: drawHorizontal 2.8s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+}
+
+.ready .sideLeft,
+.ready .sideRight {
+  animation: drawVertical 2.4s cubic-bezier(0.19, 1, 0.22, 1) 2.8s forwards;
+}
+
+.ready .bottomLeft,
+.ready .bottomRight {
+  animation: drawHorizontal 2.2s cubic-bezier(0.19, 1, 0.22, 1) 5.2s forwards;
+}
+
+@keyframes drawHorizontal {
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes drawVertical {
+  to {
+    transform: scaleY(1);
+  }
+}
+
+/* -----------------------------------------------
+   Section reveal — content filling into skeleton
+   Plays when skeleton content is replaced by real
+   content. Clip-path reveals top-to-bottom for the
+   typewriter effect.
+   ----------------------------------------------- */
+.sectionReveal {
+  animation: sectionReveal 0.4s ease-out;
+}
+
+@keyframes sectionReveal {
+  from {
+    opacity: 0;
+    clip-path: inset(0 0 30% 0);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0);
+  }
+}
+
+/* Header text should stay optically crisp; avoid clip-path-based reveal here. */
+.headerReveal {
+  animation: headerFadeIn 0.24s ease-out;
+}
+
+@keyframes headerFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* -----------------------------------------------
+   Timeline rows — staggered draw-in
+   Each row slides from the left. The --row-index
+   CSS variable controls per-row timing (80ms gap).
+   ----------------------------------------------- */
+.row {
+  position: relative;
+  opacity: 0;
+  transform: translateX(-18px);
+  animation: rowDrawIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: calc(var(--row-index, 0) * 80ms + 0.1s);
+}
+
+/* Subtle underline draws across after the row slides in */
+.row::after {
+  content: "";
+  position: absolute;
+  left: 54px;
+  right: 12px;
+  bottom: 0;
+  height: 1px;
+  background: rgba(0, 0, 0, 0.04);
+  transform-origin: left;
+  transform: scaleX(0);
+  animation: drawInline 0.28s ease-out
+    calc(var(--row-index, 0) * 80ms + 0.2s) forwards;
+}
+
+:global(.dark) .row::after {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.row:last-child::after {
+  display: none;
+}
+
+/* Skeleton rows — visible immediately, no slide animation */
+.skeletonRow {
+  position: relative;
+}
+
+/* Skeleton row separator line draw (matches real row rhythm) */
+.skeletonRow::after {
+  content: "";
+  position: absolute;
+  left: 54px;
+  right: 12px;
+  bottom: 0;
+  height: 1px;
+  background: rgba(0, 0, 0, 0.08);
+  transform-origin: left;
+  transform: scaleX(0);
+  animation: drawInline 1.1s cubic-bezier(0.22, 1, 0.36, 1)
+    calc(var(--row-index, 0) * 260ms + 0.7s) forwards;
+}
+
+:global(.dark) .skeletonRow::after {
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.skeletonRow:last-child::after {
+  display: none;
+}
+
+/* Skeleton vertical guide line draw */
+.skeletonGuide {
+  transform-origin: top center;
+  transform: scaleY(0);
+  animation: skeletonGuideGrow 0.9s cubic-bezier(0.22, 1, 0.36, 1)
+    calc(var(--row-index, 0) * 260ms + 0.45s) forwards;
+}
+
+/* Skeleton inner text lines draw left->right before shimmer sweeps over them */
+.skeletonLineMain,
+.skeletonLineSub {
+  transform-origin: left;
+  transform: scaleX(0);
+}
+
+.skeletonLineMain {
+  animation: drawHorizontal 1.2s cubic-bezier(0.22, 1, 0.36, 1)
+    calc(var(--row-index, 0) * 260ms + 0.55s) forwards;
+}
+
+.skeletonLineSub {
+  animation: drawHorizontal 1.1s cubic-bezier(0.22, 1, 0.36, 1)
+    calc(var(--row-index, 0) * 260ms + 0.8s) forwards;
+}
+
+/* The colored pip "grows" into view slightly after its row */
+.pip {
+  transform: scaleY(0);
+  animation: pipGrow 0.35s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: calc(var(--row-index, 0) * 80ms + 0.25s);
+  transform-origin: center;
+}
+
+/* Row content reveal — plays when skeleton→data swap occurs */
+.rowContentReveal {
+  animation: contentReveal 0.3s ease-out;
+}
+
+@keyframes rowDrawIn {
+  0% {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes pipGrow {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes skeletonGuideGrow {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes drawInline {
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes contentReveal {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* --- Tabs mount animation --- */
+.tabs {
+  opacity: 0;
+  animation: fadeSlideUp 0.3s ease-out forwards;
+}
+
+/* --- Footer + chips --- */
+.footer {
+  opacity: 0;
+  animation: fadeSlideUp 0.3s ease-out forwards;
+}
+
+.chipsContainer {
+  opacity: 0;
+  animation: fadeSlideUp 0.3s ease-out 0.15s forwards;
+}
+
+.hideScrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.hideScrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* --- Shared keyframe --- */
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* --- Pulse dot for "In Progress" badge --- */
+.pulseDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  animation: pulseDot 2s ease-in-out infinite;
+}
+
+@keyframes pulseDot {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  50% {
+    opacity: 0.6;
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+
+/* --- Tab active underline animation --- */
+.tabActive {
+  position: relative;
+}
+
+.tabActive::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 1px;
+  animation: tabSlide 0.2s ease-out forwards;
+}
+
+@keyframes tabSlide {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* --- Past event strikethrough --- */
+.pastEvent {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+/* --- Skeleton shimmer --- */
+.shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.3) 50%,
+    transparent 100%
+  );
+  animation: shimmerSlide 1.5s ease-in-out infinite;
+}
+
+@keyframes shimmerSlide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (max-width: 420px) {
+  .row::after,
+  .skeletonRow::after {
+    left: 46px;
+    right: 10px;
+  }
+}
+
+/* --- Reduce motion --- */
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .sectionReveal,
+  .headerReveal,
+  .row,
+  .pip,
+  .tabs,
+  .footer,
+  .chipsContainer,
+  .rowContentReveal {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+
+  .topLeft,
+  .topRight,
+  .bottomLeft,
+  .bottomRight,
+  .sideLeft,
+  .sideRight {
+    transform: none;
+    animation: none;
+  }
+
+  .row::after {
+    transform: scaleX(1);
+    animation: none;
+  }
+
+  .skeletonRow::after {
+    transform: scaleX(1);
+    animation: none;
+  }
+
+  .skeletonGuide {
+    transform: none;
+    animation: none;
+  }
+
+  .skeletonLineMain,
+  .skeletonLineSub {
+    transform: none;
+    animation: none;
+  }
+
+  .pulseDot {
+    animation: none;
+  }
+
+  .shimmer::after {
+    animation: none;
+  }
+}

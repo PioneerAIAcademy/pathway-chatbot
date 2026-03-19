@@ -1,14 +1,13 @@
+import asyncio
 import logging
 import hashlib
 import time
-from typing import Tuple, List, Dict, Any, Optional
-from collections import defaultdict
+from typing import Callable, Tuple, Any, Optional
 import traceback
 import sys
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, Security, UploadFile, status
-from llama_index.core.chat_engine.types import BaseChatEngine, NodeWithScore
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile, status
 from llama_index.core.llms import MessageRole
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -23,7 +22,6 @@ from app.api.routers.models import (
     ThumbsRequest,
 )
 from app.api.routers.vercel_response import VercelStreamResponse
-from app.cache import cache_key, get_cached_response, set_cached_response
 from app.engine import get_chat_engine
 from app.engine.query_filter import generate_filters
 from app.security import InputValidator, SecurityValidationError, RiskLevel
@@ -32,11 +30,92 @@ from langfuse.decorators import langfuse_context, observe
 from app.http_client import get_http_client
 from app.langfuse import langfuse
 from app.utils.geo_ip import get_geo_data
+from app.tools.calendar import (
+    build_calendar_intro,
+    build_initial_calendar_metadata,
+    detect_calendar_intent_via_llm,
+    localize_calendar_intro,
+    run_calendar_pipeline,
+)
+from app.tools.calendar.router import (
+    _find_original_calendar_question,
+    _has_recent_calendar_response,
+    _is_calendar_retry,
+)
 import os
 
 chat_router = r = APIRouter()
 
 logger = logging.getLogger("uvicorn")
+
+# Text-format detection is now LLM-based (see _is_text_format_request).
+# The old regex pattern has been removed to support 100+ languages.
+
+
+def _is_calendar_secondary_text_enabled() -> bool:
+    value = os.getenv("CALENDAR_SECONDARY_TEXT_ENABLED", "true").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _get_client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("X-Forwarded-For", "").strip()
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return ""
+
+
+class _StaticResponse:
+    def __init__(self, message: str):
+        self.response = message
+        self.source_nodes: list[Any] = []
+
+    async def async_response_gen(self):
+        yield self.response
+
+
+@observe(as_type="generation", name="text-format-detection")
+async def _is_text_format_request(message: str) -> bool:
+    """Detect if the user is asking for calendar dates in plain text format.
+
+    Uses an LLM call to support any language (100+), not regex.
+    Examples: "text format", "list the dates as text", "formato de texto",
+    "テキスト形式で表示して", "I don't want the card, just text".
+    """
+    if not message or len(message.strip()) < 3:
+        return False
+
+    prompt = (
+        "Does this user message request calendar dates in plain text format "
+        "(as opposed to a visual card/widget)? This includes requests like "
+        "'text format', 'list the dates', 'show as text', 'just text please', "
+        "'I don't want the card', 'list these dates in text format', "
+        "'summarize in text'. The message may be in ANY language.\n\n"
+        f"Message: \"{message}\"\n\n"
+        "Reply with exactly one word: YES or NO."
+    )
+
+    try:
+        from llama_index.core.settings import Settings as LISettings
+        import os
+        response = await LISettings.llm.acomplete(prompt)
+        answer = (response.text or "").strip().upper()
+        is_text = answer.startswith("YES")
+        langfuse_context.update_current_observation(
+            model=os.environ.get("MODEL", "gpt-4o-mini"),
+            input=message,
+            output=answer,
+        )
+        logger.info(
+            "Text-format detection: message=%r → %s",
+            message[:80], "TEXT_FORMAT" if is_text else "not text format",
+        )
+        return is_text
+    except Exception as e:
+        logger.error("Text-format detection LLM call failed: %s", e)
+        return False
+
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -56,7 +135,7 @@ def _log_exception_trace():
 # streaming endpoint - delete if not needed
 @r.post("")
 @limiter.limit("10/minute")
-@observe(as_type="generation")
+@observe()
 async def chat(
     request: Request,
     data: ChatData,
@@ -67,15 +146,14 @@ async def chat(
     security_details = {}
     chat_engine = None
     streaming_response_returned = False
+    request_started_at = time.monotonic()
 
     try:
         last_message_content = data.get_last_message_content()
         
         # Get real client IP and geo data BEFORE security validation
         # This ensures we capture IP/location for both blocked and allowed requests
-        client_ip = request.headers.get("X-Forwarded-For", request.client.host)
-        if "," in client_ip:
-            client_ip = client_ip.split(",")[0].strip()
+        client_ip = _get_client_ip(request)
         
         geo_data = await get_geo_data(client_ip)
         
@@ -178,23 +256,6 @@ async def chat(
         role = params.get("role", "missionary")
         filters = generate_filters(doc_ids, role)
 
-        # Check cache — identical question + role served instantly, no LLM call
-        ck = cache_key(last_message_content, role)
-        cached_text = get_cached_response(ck)
-        if cached_text:
-            class _CachedResponse:
-                source_nodes = []
-                async def async_response_gen(self):
-                    yield cached_text
-            return VercelStreamResponse(
-                request,
-                EventCallbackHandler(),
-                _CachedResponse(),
-                data,
-                skip_suggestions=True,
-                emit_initial_status=False,
-            )
-
         langfuse_input = (
             f"(ACMs Question): {last_message_content}"
             if role == "ACM"
@@ -264,23 +325,214 @@ async def chat(
 
         event_handler = EventCallbackHandler()
         retrieval_metadata: dict[str, Any] = {}
+        calendar_metadata: dict[str, Any] = {}
+
+        # Pre-build the Pinecone index once so both the chat engine and
+        # calendar pipeline share the same connection (avoids duplicate connect).
+        from app.engine.index import get_index
+        shared_index = get_index(params)
+
+        # Calendar tool: LLM-based intent detection + Pinecone retrieval pipeline
+        # Intent detection runs FIRST so the chat engine can be told to keep its
+        # text response brief when a visual calendar card will be rendered.
+        user_timezone = request.headers.get("X-Timezone", "UTC")
+        calendar_args = None
+        calendar_clarification = None
+        calendar_skip_cache = False
+
+        # Text-format preference check BEFORE calendar intent detection.
+        # When the user asks for text format (e.g., "Yes, list the dates in
+        # text format") after seeing a calendar card, skip the entire calendar
+        # pipeline and let normal RAG handle it.  RAG has the conversation
+        # history (including the post-card explanation) so it can produce a
+        # natural plain-text answer.
+        _skip_calendar_for_text_format = False
+        if await _is_text_format_request(last_message_content):
+            prior_intro = _has_recent_calendar_response(messages)
+            if prior_intro:
+                _skip_calendar_for_text_format = True
+                logger.info(
+                    "Text-format preference detected after calendar card — "
+                    "skipping calendar pipeline, routing to RAG"
+                )
+
+        # If the user clicked "Try again" on a failed calendar card, the
+        # frontend sends a canned retry message.  Resolve the original
+        # question so every downstream consumer uses real calendar context.
+        if not _skip_calendar_for_text_format and _is_calendar_retry(last_message_content):
+            original_q = _find_original_calendar_question(
+                last_message_content, messages,
+            )
+            if original_q:
+                logger.info(
+                    "Calendar retry detected — using original question: %s",
+                    original_q[:80],
+                )
+                last_message_content = original_q
+
+        if not _skip_calendar_for_text_format:
+            try:
+                calendar_args, calendar_clarification, calendar_skip_cache = (
+                    await detect_calendar_intent_via_llm(
+                        last_message_content,
+                        user_timezone,
+                        chat_history=messages,
+                    )
+                )
+            except Exception as e:
+                logger.error(f"Calendar intent detection failed: {e}")
+
+        if calendar_args is not None:
+            logger.info(
+                f"Calendar intent detected: {calendar_args.query_type.value}, "
+                f"block={calendar_args.block_number}, season={calendar_args.season}"
+            )
+            calendar_metadata.update(build_initial_calendar_metadata(calendar_args))
+
+        # Build the calendar pipeline that runs concurrently with the chat stream.
+        # Intent detection is already done; this only does retrieval + extraction.
+        # Only define when calendar_args is present to avoid pointless Langfuse traces.
+        _calendar_progress_queue: Optional[asyncio.Queue] = None
+        _calendar_pipeline_fn: Optional[Callable] = None
+        if calendar_args is not None:
+            _calendar_progress_queue = asyncio.Queue(maxsize=8)
+
+            async def _calendar_pipeline():
+                """Runs concurrently with the main RAG stream."""
+                nonlocal calendar_metadata
+                card, pipeline_metadata = await run_calendar_pipeline(
+                    calendar_args,
+                    shared_index,
+                    user_query=last_message_content,
+                    user_language=user_language,
+                    chat_history=messages,
+                    skip_cache=calendar_skip_cache,
+                    progress_queue=_calendar_progress_queue,
+                )
+                if pipeline_metadata:
+                    calendar_metadata.update(pipeline_metadata)
+                if card is None and pipeline_metadata.get("pipeline_status") == "unsupported_year":
+                    return {
+                        "__calendar_error_reason": "unsupported_year",
+                        "requestedYear": pipeline_metadata.get("requested_year"),
+                        "availableYears": pipeline_metadata.get("available_years_from_nodes", []),
+                    }
+                return card
+
+            _calendar_pipeline_fn = _calendar_pipeline
+
+        async def _calendar_secondary_text_pipeline(calendar_data: dict) -> Optional[dict[str, Any]]:
+            """Optional phase-2 mixed-intent follow-up using normal RAG.
+
+            Runs only when calendar pipeline marks rag_context with sufficient confidence
+            and feature flag is enabled.
+            """
+            if not _is_calendar_secondary_text_enabled():
+                return None
+
+            mode = str(calendar_data.get("secondaryTextMode") or "").strip().lower()
+            confidence = float(calendar_data.get("secondaryTextConfidence") or 0.0)
+            if mode != "rag_context" or confidence < 0.75:
+                return None
+
+            rag_engine = None
+            try:
+                rag_engine = get_chat_engine(filters=filters, params=params)
+                followup_prompt = (
+                    "A calendar card is already displayed showing relevant dates and deadlines. "
+                    "Now provide a helpful text answer to the user's question in 2-4 concise sentences. "
+                    "If the question is about a calendar item (e.g. a deadline), explain what it means, "
+                    "what happens if it's missed, and any steps the student should take. "
+                    "If the question has a non-calendar component, answer that part instead. "
+                    "Do NOT repeat the dates already shown in the card. "
+                    "Avoid second-person pronouns such as 'you' and 'your'. "
+                    "Refer to students or missionaries in the third person instead.\n\n"
+                    f"User message: {last_message_content}"
+                )
+                response = await rag_engine.achat(followup_prompt, messages)
+                text = str(getattr(response, "response", "") or "").strip()
+                if not text:
+                    return None
+
+                followup_nodes = list(getattr(response, "source_nodes", []) or [])
+                if followup_nodes:
+                    try:
+                        retrieval_metadata["secondary_retrieved_docs"] = "\n\n".join(
+                            [
+                                f"node_id: {idx+1}\n{node.metadata.get('url', '')}\n{node.text}"
+                                for idx, node in enumerate(followup_nodes)
+                            ]
+                        )
+                        retrieval_metadata["secondary_retrieved_docs_count"] = len(
+                            followup_nodes
+                        )
+                    except Exception as retrieval_error:
+                        logger.warning(
+                            "Failed to build secondary retrieved docs metadata: %s",
+                            retrieval_error,
+                        )
+
+                calendar_metadata["secondary_text_followup"] = {
+                    "mode": mode,
+                    "confidence": confidence,
+                    "status": "generated",
+                }
+                return {"text": text, "source_nodes": followup_nodes}
+            except Exception as e:
+                logger.warning("Secondary RAG follow-up failed: %s", e)
+                calendar_metadata["secondary_text_followup"] = {
+                    "mode": mode,
+                    "confidence": confidence,
+                    "status": "error",
+                    "error": str(e),
+                }
+                return None
+            finally:
+                if rag_engine is not None:
+                    try:
+                        rag_engine.reset()
+                    except Exception:
+                        pass
 
         async def _on_stream_end(final_response: str) -> None:
             # Update trace output after streaming finishes (or client disconnects).
             try:
+                stream_end_time = time.monotonic()
+                total_duration_ms = round((stream_end_time - request_started_at) * 1000)
+
+                final_tags = [
+                    tag
+                    for tag in success_tags
+                    if not tag.startswith("source:") and not tag.startswith("calendar:")
+                ]
+
                 if retrieval_metadata:
                     clean_metadata.update(retrieval_metadata)
+
+                if calendar_metadata:
+                    clean_metadata["calendar_pipeline"] = calendar_metadata
+                    final_tags.append("source:calendar")
+                    final_tags.append("calendar:detected")
+                    if calendar_metadata.get("pipeline_status") == "success":
+                        final_tags.append("calendar:success")
+                    else:
+                        final_tags.append("calendar:error")
+                else:
+                    final_tags.append("source:rag")
+
+                # Latency tracking: total request-to-stream-end duration
+                clean_metadata["latency"] = {
+                    "total_duration_ms": total_duration_ms,
+                }
+
                 langfuse.trace(id=trace_id).update(
                     output=final_response,
                     metadata=clean_metadata,
+                    tags=final_tags,
                 )
                 langfuse.flush()
             except Exception as langfuse_error:
                 logger.error(f"Failed to update Langfuse trace output: {langfuse_error}")
-
-            # Save response to cache so identical future questions are served instantly
-            if final_response:
-                set_cached_response(ck, final_response)
 
             # Ensure chat engine memory is cleaned up after the request completes.
             if chat_engine is not None:
@@ -290,8 +542,38 @@ async def chat(
                 except Exception as cleanup_error:
                     logger.error(f"Failed to reset chat engine: {cleanup_error}")
 
+        # When calendar intent is detected, skip the RAG engine entirely.
+        # The card shows the data; we just need a short intro sentence.
+        if calendar_clarification and calendar_args is None:
+            streaming_response_returned = True
+            return VercelStreamResponse(
+                request,
+                event_handler,
+                _StaticResponse(calendar_clarification),
+                data,
+                trace_id=trace_id,
+                user_language=user_language,
+                skip_suggestions=True,
+                on_stream_end=_on_stream_end,
+                emit_initial_status=False,
+            )
+
+        calendar_intro: Optional[str] = None
+        if calendar_args is not None:
+            calendar_intro = build_calendar_intro(calendar_args)
+            calendar_intro = await localize_calendar_intro(
+                calendar_intro,
+                user_language,
+                last_message_content,
+            )
+
         async def _get_response() -> Any:
             nonlocal chat_engine
+            # Skip RAG when a calendar card will be rendered — the card
+            # already shows all dates/deadlines from Pinecone.
+            if calendar_intro is not None:
+                return None
+
             logger.info(
                 f"Creating chat engine with filters: {str(filters)}",
             )
@@ -318,7 +600,22 @@ async def chat(
 
             return response
 
+        async def _rag_fallback_for_calendar():
+            """If calendar pipeline times out, answer via normal RAG."""
+            engine = get_chat_engine(filters=filters, params=params)
+            engine.callback_manager.handlers.append(event_handler)
+            return await engine.astream_chat(last_message_content, messages)
+
         streaming_response_returned = True
+
+        # Determine the calendar query type for status message selection
+        _cal_query_type: Optional[str] = None
+        if calendar_args is not None:
+            if calendar_skip_cache:
+                _cal_query_type = "pushback"
+            else:
+                _cal_query_type = calendar_args.query_type.value
+
         return VercelStreamResponse(
             request,
             event_handler,
@@ -326,9 +623,15 @@ async def chat(
             data,
             trace_id=trace_id,
             user_language=user_language,
-            skip_suggestions=is_suspicious,
+            skip_suggestions=is_suspicious or (calendar_args is not None),
             on_stream_end=_on_stream_end,
-            emit_initial_status=False,
+            emit_initial_status=(calendar_intro is None),
+            calendar_pipeline=_calendar_pipeline_fn,
+            calendar_intro=calendar_intro,
+            supplemental_text_pipeline=_calendar_secondary_text_pipeline,
+            rag_fallback=_rag_fallback_for_calendar,
+            calendar_query_type=_cal_query_type,
+            calendar_progress_queue=_calendar_progress_queue,
         )
         # return VercelStreamResponse(request, event_handler, response, data, tokens)
     except Exception as e:
@@ -376,9 +679,7 @@ async def chat_request(
         
         # Get real client IP and geo data BEFORE security validation
         # This ensures we capture IP/location for both blocked and allowed requests
-        client_ip = request.headers.get("X-Forwarded-For", request.client.host)
-        if "," in client_ip:
-            client_ip = client_ip.split(",")[0].strip()
+        client_ip = _get_client_ip(request)
         
         geo_data = await get_geo_data(client_ip)
         
@@ -678,9 +979,7 @@ async def general_feedback(
     session_id = request.headers.get("X-Session-ID", request.headers.get("X-Session-Id"))
     device_id = request.headers.get("X-Device-ID")
 
-    client_ip = request.headers.get("X-Forwarded-For", request.client.host)
-    if "," in client_ip:
-        client_ip = client_ip.split(",")[0].strip()
+    client_ip = _get_client_ip(request)
 
     geo_data = await get_geo_data(client_ip)
 
@@ -702,84 +1001,3 @@ async def general_feedback(
     )
 
     return {"status": "success", "message": "Thank you for your feedback!"}
-
-
-def split_header_content(text: str) -> Tuple[str, str]:
-    lines = text.split("\n", 1)
-    if len(lines) > 1:
-        return lines[0] + "\n", lines[1]
-    return "", text
-
-
-def organize_nodes(nodes: List[Dict[str, Any]]) -> Dict[str, List[str]]:
-    # Step 1: Group nodes by page (URL)
-    pages = defaultdict(list)
-    for node in nodes:
-        url = node.metadata["url"]
-        pages[url].append(node)
-
-    # Step 2: Order nodes on each page by sequence number
-    for url, page_nodes in pages.items():
-        pages[url] = sorted(page_nodes, key=lambda x: x.metadata["sequence"])
-
-    # Step 3: Merge overlapping nodes
-    organized_pages = {}
-    for url, page_nodes in pages.items():
-        merged_nodes = merge_nodes_with_headers(page_nodes)
-        organized_pages[url] = merged_nodes
-
-    return organized_pages
-
-
-def merge_nodes_with_headers(nodes: List[Dict[str, Any]]) -> List[str]:
-    merged_results = []
-    current_merged = ""
-    current_header = ""
-
-    for node in nodes:
-        node_text = node.text
-        header, content = split_header_content(node_text)
-
-        if header != current_header:
-            if current_merged:
-                merged_results.append(current_header + current_merged)
-            current_header = header
-            current_merged = content
-        else:
-            current_merged = merge_content(current_merged, content)
-
-    if current_merged:
-        merged_results.append(current_header + current_merged)
-
-    return merged_results
-
-
-def split_header_content(text: str) -> Tuple[str, str]:
-    lines = text.split("\n", 1)
-    if len(lines) > 1:
-        return lines[0] + "\n", lines[1]
-    return "", text
-
-
-def merge_content(existing: str, new: str) -> str:
-    # This is a simple merge function. You might need to implement
-    # a more sophisticated merging logic based on your specific requirements.
-    combined = existing + " " + new
-    words = combined.split()
-    return " ".join(sorted(set(words), key=words.index))
-
-
-def process_response_nodes(
-    nodes: List[NodeWithScore],
-    background_tasks: BackgroundTasks,
-):
-    # organize_nodes(nodes)
-
-    try:
-        # Start background tasks to download documents from LlamaCloud if needed
-        from app.engine.service import LLamaCloudFileService
-
-        LLamaCloudFileService.download_files_from_nodes(nodes, background_tasks)
-    except ImportError:
-        logger.debug("LlamaCloud is not configured. Skipping post processing of nodes")
-        pass

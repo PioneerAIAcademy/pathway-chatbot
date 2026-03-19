@@ -22,6 +22,28 @@
   margin-left: 20px;
 }
 
+/* External links and email links in chat messages */
+.custom-markdown a[href^="http"],
+.custom-markdown a[href^="mailto"] {
+  color: hsl(var(--link));
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  transition: color 150ms ease, text-decoration-style 150ms ease;
+}
+
+.custom-markdown a[href^="http"]:hover,
+.custom-markdown a[href^="mailto"]:hover {
+  color: hsl(var(--link-hover));
+  text-decoration-style: solid;
+}
+
+.custom-markdown a[href^="http"]:visited,
+.custom-markdown a[href^="mailto"]:visited {
+  color: hsl(var(--link-visited));
+}
+
 /* Reference list item styling */
 .reference-list-item {
   transition: background-color 300ms ease-in-out;

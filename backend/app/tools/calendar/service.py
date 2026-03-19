@@ -1,0 +1,1269 @@
+import asyncio
+import json
+import logging
+import os
+import re
+from datetime import date
+from typing import Any, Optional
+
+from langfuse.decorators import langfuse_context, observe
+from llama_index.core.llms import ChatMessage, MessageRole
+from llama_index.core.settings import Settings
+
+from app.tools.calendar.cache import calendar_cache
+from app.tools.calendar.schema import CalendarToolArgs
+from app.tools.calendar.tool import (
+    _get_today,
+    build_calendar_card,
+    compute_suggestions,
+    extract_full_year_by_semester,
+    extract_structured_data,
+    is_block_extraction_misaligned,
+    query_pinecone_for_calendar,
+)
+
+logger = logging.getLogger("uvicorn")
+
+_YEAR_PATTERN = re.compile(r"\b20\d{2}\b")
+
+_SECONDARY_TEXT_MODE_PROMPT = (
+    "You classify whether a calendar response also needs a second text answer. "
+    "Return JSON only with keys: mode, confidence, reason. "
+    "mode must be one of: calendar_context, rag_context, clarification. "
+    "Use rag_context when: "
+    "(a) the user asks a non-calendar/process question alongside calendar data, OR "
+    "(b) the user asks an informational/explanatory question about a calendar item "
+    "(e.g. 'what should I know about…', 'tell me about…', 'what is…', 'explain…', 'what happens if…'). "
+    "The calendar card only shows dates — it cannot explain meaning, consequences, or preparation steps. "
+    "Use clarification when intent is truly ambiguous and you cannot determine what the user needs. "
+    "Use calendar_context ONLY when the user asks a purely date/schedule question that the card fully answers "
+    "(e.g. 'when is…', 'show me the dates'). "
+    "confidence must be a float from 0 to 1."
+)
+
+
+def _available_years_from_nodes(nodes: list[Any]) -> list[int]:
+    years: set[int] = set()
+    for node in nodes or []:
+        text = getattr(node, "text", "") or ""
+        for match in _YEAR_PATTERN.findall(text):
+            year = int(match)
+            if 2025 <= year <= 2100:
+                years.add(year)
+    return sorted(years)
+
+
+def _node_key(node: Any) -> str:
+    metadata = getattr(getattr(node, "node", None), "metadata", None) or {}
+    node_id = getattr(getattr(node, "node", None), "node_id", None)
+    url = metadata.get("url") if isinstance(metadata, dict) else None
+    text = (getattr(node, "text", "") or "")[:120]
+    return f"{node_id}|{url}|{text}"
+
+
+def _merge_nodes(primary: list[Any], extra: list[Any], max_nodes: int = 18) -> list[Any]:
+    seen: set[str] = set()
+    merged: list[Any] = []
+    for node in [*(primary or []), *(extra or [])]:
+        key = _node_key(node)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(node)
+        if len(merged) >= max_nodes:
+            break
+    return merged
+
+
+def _prioritize_nodes_for_year(
+    nodes: list[Any],
+    year: int,
+    *,
+    max_nodes: int = 12,
+) -> list[Any]:
+    year_str = str(year)
+    matching: list[Any] = []
+    non_matching: list[Any] = []
+
+    for node in nodes or []:
+        text = getattr(node, "text", "") or ""
+        if year_str in text:
+            matching.append(node)
+        else:
+            non_matching.append(node)
+
+    prioritized = [*matching, *non_matching]
+    return prioritized[:max_nodes]
+
+
+def _prioritize_nodes_for_full_year_blocks(
+    nodes: list[Any],
+    year: int,
+    *,
+    max_nodes: int = 16,
+) -> list[Any]:
+    year_str = str(year)
+    year_nodes: list[Any] = []
+    fallback_nodes: list[Any] = []
+
+    for node in nodes or []:
+        text = getattr(node, "text", "") or ""
+        if year_str in text:
+            year_nodes.append(node)
+        else:
+            fallback_nodes.append(node)
+
+    selected: list[Any] = []
+    used: set[str] = set()
+
+    def _add_node(node: Any) -> None:
+        key = _node_key(node)
+        if key in used:
+            return
+        used.add(key)
+        selected.append(node)
+
+    for block in range(1, 7):
+        block_marker = f"block {block}"
+        match = next(
+            (
+                node
+                for node in year_nodes
+                if block_marker in (getattr(node, "text", "") or "").lower()
+            ),
+            None,
+        )
+        if match is not None:
+            _add_node(match)
+
+    for node in [*year_nodes, *fallback_nodes]:
+        if len(selected) >= max_nodes:
+            break
+        _add_node(node)
+
+    return selected[:max_nodes]
+
+
+def _build_retrieved_docs_metadata(
+    nodes: list[Any],
+    *,
+    max_docs: int = 8,
+    max_chars: int = 420,
+) -> dict[str, Any]:
+    docs: list[dict[str, Any]] = []
+    for idx, node in enumerate(nodes[:max_docs]):
+        metadata = getattr(getattr(node, "node", None), "metadata", None) or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+
+        text = (getattr(node, "text", "") or "").strip()
+        snippet = text[:max_chars]
+        if len(text) > max_chars:
+            snippet += "…"
+
+        docs.append(
+            {
+                "rank": idx + 1,
+                "score": getattr(node, "score", None),
+                "url": metadata.get("url") or metadata.get("source_url"),
+                "title": metadata.get("title") or metadata.get("file_name"),
+                "snippet": snippet,
+            }
+        )
+
+    return {
+        "retrieved_nodes_count": len(nodes),
+        "retrieved_docs_count": len(nodes),
+        "retrieved_docs": docs,
+    }
+
+
+@observe(as_type="generation", name="calendar-intro-localization")
+async def localize_calendar_intro(
+    intro_text: str,
+    user_language: Optional[str],
+    original_user_message: str,
+) -> str:
+    """
+    Localize intro text using the configured LLM so we don't hardcode templates
+    for every language.
+    """
+    if not intro_text:
+        return intro_text
+
+    language = (user_language or "").strip().lower()
+    if language in {"", "en"}:
+        return intro_text
+
+    prompt = (
+        "Translate the assistant intro sentence into the same language as the user message. "
+        "Keep meaning, tone, and punctuation. Keep it concise. "
+        "Return only the translated sentence."
+    )
+
+    try:
+        response = await Settings.llm.achat(
+            messages=[
+                ChatMessage(role=MessageRole.SYSTEM, content=prompt),
+                ChatMessage(
+                    role=MessageRole.USER,
+                    content=(
+                        f"User message language sample: {original_user_message}\n\n"
+                        f"Intro to translate: {intro_text}"
+                    ),
+                ),
+            ]
+        )
+        translated = (response.message.content or "").strip()
+        langfuse_context.update_current_observation(
+            model=os.environ.get("MODEL", "gpt-4o-mini"),
+            input=intro_text,
+            output=translated,
+        )
+        return translated if translated else intro_text
+    except Exception as e:
+        logger.warning(f"Calendar intro localization failed: {e}")
+        return intro_text
+
+
+def _extract_translatable_card(card: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "title": card.get("title"),
+        "subtitle": card.get("subtitle"),
+        "footnote": card.get("footnote"),
+        "textFormatOffer": card.get("textFormatOffer"),
+        "suggestedQuestions": card.get("suggestedQuestions", []),
+        "spotlight": {
+            "title": (card.get("spotlight") or {}).get("title"),
+            "description": (card.get("spotlight") or {}).get("description"),
+            "countdown": (card.get("spotlight") or {}).get("countdown"),
+        }
+        if card.get("spotlight")
+        else None,
+        "events": [
+            {
+                "name": evt.get("name"),
+                "description": evt.get("description"),
+                "countdown": evt.get("countdown"),
+                "section": evt.get("section"),
+            }
+            for evt in card.get("events", [])
+        ],
+        "tabs": [
+            {
+                "label": tab.get("label"),
+                "events": [
+                    {
+                        "name": evt.get("name"),
+                        "description": evt.get("description"),
+                        "countdown": evt.get("countdown"),
+                        "section": evt.get("section"),
+                    }
+                    for evt in (tab.get("events") or [])
+                ],
+            }
+            for tab in (card.get("tabs") or [])
+        ],
+    }
+
+
+def _apply_translated_card(card: dict[str, Any], translated: dict[str, Any]) -> dict[str, Any]:
+    for key in ("title", "subtitle", "footnote", "textFormatOffer"):
+        if key in translated and translated.get(key) is not None:
+            card[key] = translated.get(key)
+
+    translated_questions = translated.get("suggestedQuestions")
+    if isinstance(translated_questions, list):
+        card["suggestedQuestions"] = [str(q) for q in translated_questions if q]
+
+    if card.get("spotlight") and isinstance(translated.get("spotlight"), dict):
+        for key in ("title", "description", "countdown"):
+            value = translated["spotlight"].get(key)
+            if value is not None:
+                card["spotlight"][key] = value
+
+    translated_events = translated.get("events")
+    if isinstance(translated_events, list):
+        for idx, evt in enumerate(card.get("events", [])):
+            if idx >= len(translated_events) or not isinstance(translated_events[idx], dict):
+                continue
+            for key in ("name", "description", "countdown", "section"):
+                value = translated_events[idx].get(key)
+                if value is not None:
+                    evt[key] = value
+
+    translated_tabs = translated.get("tabs")
+    if isinstance(translated_tabs, list):
+        for tab_idx, tab in enumerate(card.get("tabs", [])):
+            if tab_idx >= len(translated_tabs) or not isinstance(translated_tabs[tab_idx], dict):
+                continue
+            tab_label = translated_tabs[tab_idx].get("label")
+            if tab_label is not None:
+                tab["label"] = tab_label
+
+            tab_events = translated_tabs[tab_idx].get("events")
+            if not isinstance(tab_events, list):
+                continue
+            for evt_idx, evt in enumerate(tab.get("events", [])):
+                if evt_idx >= len(tab_events) or not isinstance(tab_events[evt_idx], dict):
+                    continue
+                for key in ("name", "description", "countdown", "section"):
+                    value = tab_events[evt_idx].get(key)
+                    if value is not None:
+                        evt[key] = value
+
+    return card
+
+
+def _parse_translation_json(raw: str) -> Optional[dict[str, Any]]:
+    candidate = raw.strip()
+    if not candidate:
+        return None
+
+    if candidate.startswith("```"):
+        lines = candidate.splitlines()
+        if len(lines) >= 2:
+            if lines[-1].strip().startswith("```"):
+                lines = lines[1:-1]
+            else:
+                lines = lines[1:]
+            candidate = "\n".join(lines).strip()
+
+    try:
+        parsed = json.loads(candidate)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        try:
+            parsed = json.loads(candidate[start : end + 1])
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+@observe(as_type="generation", name="calendar-card-localization")
+async def localize_calendar_card(
+    card: dict[str, Any],
+    user_language: Optional[str],
+    original_user_message: str,
+) -> dict[str, Any]:
+    language = (user_language or "").strip().lower()
+    if language in {"", "en"}:
+        return card
+
+    payload = _extract_translatable_card(card)
+    prompt = (
+        "SYSTEM TASK: LOCALIZE JSON DISPLAY TEXT.\n"
+        "WARNING: STRICT OUTPUT CONTRACT — VIOLATIONS ARE NOT ACCEPTABLE.\n\n"
+        "RULES (MANDATORY):\n"
+        "1) TRANSLATE ONLY HUMAN-READABLE DISPLAY STRINGS.\n"
+        "2) DO NOT ADD, REMOVE, OR RENAME ANY KEYS.\n"
+        "3) PRESERVE JSON SHAPE EXACTLY (OBJECT/LIST STRUCTURE, LIST LENGTHS, ORDER).\n"
+        "4) DO NOT CHANGE DATES, NUMBERS, ISO STRINGS, IDS, OR STATUS-LIKE CODES.\n"
+        "5) DO NOT WRITE EXPLANATIONS, NOTES, OR MARKDOWN.\n"
+        "6) OUTPUT MUST BE EXACTLY ONE VALID JSON OBJECT.\n\n"
+        "IF YOU CANNOT COMPLY, RETURN THE ORIGINAL JSON UNCHANGED."
+    )
+
+    try:
+        response = await Settings.llm.achat(
+            messages=[
+                ChatMessage(role=MessageRole.SYSTEM, content=prompt),
+                ChatMessage(
+                    role=MessageRole.USER,
+                    content=(
+                        f"User message language sample: {original_user_message}\n\n"
+                        f"JSON:\n{json.dumps(payload, ensure_ascii=False)}"
+                    ),
+                ),
+            ]
+        )
+        translated = _parse_translation_json(response.message.content or "")
+        langfuse_context.update_current_observation(
+            model=os.environ.get("MODEL", "gpt-4o-mini"),
+            input=f"Localize card ({language})",
+            output=(response.message.content or "")[:300],
+        )
+        if translated is not None:
+            return _apply_translated_card(card, translated)
+        return card
+    except Exception as e:
+        logger.warning(f"Calendar card localization failed: {e}")
+        return card
+
+
+def _normalize_season(raw: Optional[str]) -> str:
+    value = (raw or "").strip().lower()
+    if value == "summer":
+        return "spring"
+    if value in {"winter", "spring", "fall"}:
+        return value
+    return ""
+
+
+def _season_for_block(block_number: Optional[int]) -> str:
+    if block_number in (1, 2):
+        return "winter"
+    if block_number in (3, 4):
+        return "spring"
+    if block_number in (5, 6):
+        return "fall"
+    return ""
+
+
+def _humanize_deadline(deadline: Optional[str]) -> str:
+    if not deadline:
+        return "deadline"
+    label = deadline.replace("_", " ").strip().lower()
+    if label == "drop":
+        return "drop / auto-drop"
+    if label == "add course":
+        return "add course"
+    return label
+
+
+def _clamp_confidence(value: Any, default: float) -> float:
+    try:
+        parsed = float(value)
+    except Exception:
+        return default
+    if parsed < 0:
+        return 0.0
+    if parsed > 1:
+        return 1.0
+    return parsed
+
+
+@observe(as_type="generation", name="calendar-secondary-text-classifier")
+async def _classify_secondary_text_mode_llm(
+    args: CalendarToolArgs,
+    card: dict[str, Any],
+    user_query: str,
+) -> Optional[dict[str, Any]]:
+    """Classify secondary text mode via a lightweight structured LLM call."""
+    try:
+        payload = {
+            "user_query": user_query,
+            "calendar_args": {
+                "query_type": args.query_type.value,
+                "scope": getattr(args, "scope", "term"),
+                "season": args.season,
+                "year": args.year,
+                "block_number": args.block_number,
+                "specific_deadline": args.specific_deadline,
+            },
+            "card_summary": {
+                "title": card.get("title"),
+                "subtitle": card.get("subtitle"),
+                "spotlight_title": (card.get("spotlight") or {}).get("title"),
+                "event_names": [
+                    evt.get("name")
+                    for evt in (card.get("events") or [])[:5]
+                    if isinstance(evt, dict)
+                ],
+            },
+        }
+
+        user_content = json.dumps(payload, ensure_ascii=False)
+        response = await Settings.llm.achat(
+            messages=[
+                ChatMessage(role=MessageRole.SYSTEM, content=_SECONDARY_TEXT_MODE_PROMPT),
+                ChatMessage(
+                    role=MessageRole.USER,
+                    content=user_content,
+                ),
+            ],
+        )
+
+        raw_output = response.message.content or ""
+        langfuse_context.update_current_observation(
+            model=os.environ.get("MODEL", "gpt-4o-mini"),
+            input=user_content,
+            output=raw_output,
+        )
+
+        parsed = _parse_translation_json(raw_output)
+        if not isinstance(parsed, dict):
+            return None
+
+        mode = str(parsed.get("mode") or "").strip().lower()
+        if mode not in {"calendar_context", "rag_context", "clarification"}:
+            return None
+
+        confidence = _clamp_confidence(parsed.get("confidence"), default=0.0)
+        reason = str(parsed.get("reason") or "llm_classifier").strip() or "llm_classifier"
+
+        return {
+            "mode": mode,
+            "confidence": confidence,
+            "reason": reason,
+        }
+    except Exception as e:
+        logger.warning("Secondary text LLM classifier failed: %s", e)
+        return None
+
+
+def _card_explanation_prompt(today: date, queried_year: int | None = None) -> str:
+    from app.tools.calendar.router import _season_block_for_month
+
+    season, block = _season_block_for_month(today.month)
+    next_block = block + 1 if block < 6 else 1
+    next_year = today.year if block < 6 else today.year + 1
+    next_season_map = {1: "winter", 2: "winter", 3: "spring", 4: "spring", 5: "fall", 6: "fall"}
+    next_season = next_season_map[next_block]
+
+    # Build pre-computed block status relative to the QUERIED year, not just current block
+    block_info = {
+        1: ("Winter", "Jan–Feb"), 2: ("Winter", "Mar–Apr"),
+        3: ("Spring", "May–Jun"), 4: ("Spring", "Jul–Aug"),
+        5: ("Fall", "Sep–Oct"),   6: ("Fall", "Nov–Dec"),
+    }
+    qy = queried_year or today.year
+    all_past = qy < today.year
+    all_future = qy > today.year
+    status_lines = []
+    for b in range(1, 7):
+        s, m = block_info[b]
+        if all_past:
+            status_lines.append(f"  Block {b} ({s}, {m}): PAST — {qy} has concluded")
+        elif all_future:
+            status_lines.append(f"  Block {b} ({s}, {m}): FUTURE — {qy} has not started")
+        elif b < block:
+            status_lines.append(f"  Block {b} ({s}, {m}): PAST")
+        elif b == block:
+            status_lines.append(f"  Block {b} ({s}, {m}): CURRENT — in progress")
+        else:
+            status_lines.append(f"  Block {b} ({s}, {m}): FUTURE")
+    block_status = "\n".join(status_lines)
+
+    # Year-relative tense context
+    if all_past:
+        tense_context = (
+            f"\nIMPORTANT — TENSE: The card shows dates from {qy}, which has "
+            f"ENTIRELY PASSED. Every date shown is in the past. "
+            "Use PAST TENSE for ALL dates ('started', 'ended', 'was', 'opened', 'closed'). "
+            "NEVER use future tense ('will begin', 'will start', 'will be') for any date "
+            f"in {qy}. Do NOT warn about missing deadlines — they are historical. "
+            "Instead, briefly summarize the key dates that were shown and, if helpful, "
+            f"mention what the CURRENT block is ({season.capitalize()} {today.year} Block {block}).\n"
+        )
+    elif all_future:
+        tense_context = (
+            f"\nIMPORTANT — TENSE: The card shows dates from {qy}, which has "
+            "NOT YET STARTED. Use future tense where appropriate.\n"
+        )
+    else:
+        tense_context = (
+            "\nTENSE: Use PAST TENSE for any date with status=past. "
+            "Use present/future tense only for dates with status=upcoming or today. "
+            "Never say 'will begin' or 'will start' for a date that has already occurred.\n"
+        )
+
+    return (
+        "You are a BYU-Pathway missionary support assistant. The user is a "
+        "SERVICE MISSIONARY who advises students — not a student themselves. "
+        "A calendar card was just displayed showing academic dates. Write 1-2 "
+        "brief, helpful sentences that directly answer their question based on "
+        "the card data below. Then end with a short, relevant follow-up question "
+        "drawn from the card data to keep the conversation natural (e.g. "
+        "'Should I pull up Block 2\\'s dates as well?' or "
+        "'Should I summarize the semester deadlines in text format?'). The "
+        "follow-up question MUST relate to something in the source data — do "
+        "NOT invent topics.\n\n"
+        "AUDIENCE: Always refer to students in the third person (e.g. "
+        "'students must pay by this date', 'students will be assessed a late fee'). "
+        "NEVER use 'you' to mean the student — the missionary is the one reading. "
+        "Avoid second-person pronouns ('you', 'your') entirely, including in the "
+        "follow-up question.\n\n"
+        f"TODAY: {today.strftime('%B %d, %Y')}. "
+        f"Current block: {season.capitalize()} {today.year} Block {block}. "
+        f"Next block: {next_season.capitalize()} {next_year} Block {next_block}.\n"
+        f"Card shows data for: {qy}.\n"
+        f"{tense_context}\n"
+        f"BLOCK STATUS (use this — do NOT do your own date math):\n{block_status}\n\n"
+        "BLOCK-TO-MONTH MAPPING (use this to verify dates):\n"
+        "  Block 1 = Winter Jan–Feb, Block 2 = Winter Mar–Apr\n"
+        "  Block 3 = Spring May–Jun, Block 4 = Spring Jul–Aug\n"
+        "  Block 5 = Fall Sep–Oct, Block 6 = Fall Nov–Dec\n"
+        "  If a date is in April, it belongs to Block 2 (NOT Block 3).\n"
+        "  If a date is in September, it belongs to Block 5 (NOT Block 3).\n\n"
+        "Rules:\n"
+        "- Use the blocks_shown and key_events fields as your data source. "
+        "Each event has its date and status (past/upcoming).\n"
+        "- For multi-block cards, use block_start and block_end from blocks_shown "
+        "for the actual block range. Do NOT treat registration or grades dates as "
+        "the block's start/end.\n"
+        "- If multiple blocks are shown, describe the semester or full year across "
+        "those blocks. Do NOT reduce the answer to only the first block or active tab.\n"
+        "- When multiple blocks are shown, refer to the shown scope as a semester "
+        "or full-year calendar — not 'the block' unless the question was block-specific.\n"
+        "- If a key deadline has already passed (status=past), mention THE VERY NEXT one in "
+        "chronological order — NOT a later block.\n"
+        "- Do NOT repeat the full list of dates — just answer the question conversationally.\n"
+        "- Keep the answer concise: about 45-60 words before the follow-up question.\n"
+        "- For multi-block cards, mention at most one or two representative dates total unless "
+        "the user explicitly asks for a detailed breakdown.\n"
+        "- Do NOT start with 'Based on the card' or similar meta-references.\n"
+        "- NEVER say you 'can\\'t provide' or 'don\\'t have' information that the card "
+        "already shows. The card IS your answer — summarize what it shows.\n"
+        "- Use **bold** markdown to emphasize key facts.\n"
+        "- If conversation history is provided, reference it to stay contextual — "
+        "address any concerns or confusion the user expressed. Keep tone natural.\n\n"
+        "- For multi-block cards, keep the follow-up question within the shown scope "
+        "unless the conversation explicitly asks to move to a different block, semester, or year.\n\n"
+        "REGISTRATION STATUS CHECK (apply when the question is about registration):\n"
+        "- Registration is OPEN between the 'Registration Opens' date and the "
+        "'Add Course Deadline' (Day 1 of the block/semester).\n"
+        "- Registration is CLOSED after the Add Course Deadline has passed.\n"
+        f"- If the Add Course Deadline is before today ({today.strftime('%B %d, %Y')}), "
+        "say registration is CLOSED and mention when the NEXT block's registration opens.\n"
+        "- 'Priority Registration Deadline' and 'Registration Opens' are "
+        "different labels for the same concept.\n"
+        "- NEVER give false hope: if registration has closed, do NOT say students "
+        "'can register' or 'registration is available'."
+    )
+
+
+def _extract_year_from_card(card: dict[str, Any]) -> int | None:
+    """Extract the queried year from card title/subtitle (e.g., 'Winter 2025' → 2025)."""
+    for field in ("title", "subtitle"):
+        val = card.get(field) or ""
+        m = re.search(r"\b(20\d{2})\b", val)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _build_card_explanation_payload(
+    card: dict[str, Any],
+    user_query: str,
+    source_context: str = "",
+    chat_history: list | None = None,
+) -> dict[str, Any]:
+    spotlight = card.get("spotlight") or {}
+    tabs = card.get("tabs") or []
+
+    payload_dict: dict[str, Any] = {
+        "user_question": user_query,
+        "card_title": card.get("title"),
+        "card_subtitle": card.get("subtitle"),
+        "spotlight": {
+            "title": spotlight.get("title"),
+            "date": spotlight.get("date"),
+            "status": spotlight.get("status"),
+            "countdown": spotlight.get("countdown"),
+        } if spotlight else None,
+    }
+
+    if tabs:
+        block_summaries: list[dict[str, Any]] = []
+        cross_block_events: list[str] = []
+        for tab in tabs:
+            label = tab.get("label", "")
+            tab_events = [
+                e for e in (tab.get("events") or [])
+                if isinstance(e, dict) and e.get("date") and e.get("name")
+            ]
+            tab_events.sort(key=lambda e: e.get("date", ""))
+            block_start = next(
+                (
+                    e.get("date")
+                    for e in tab_events
+                    if str(e.get("name", "")).strip().lower() == "start"
+                ),
+                tab_events[0].get("date") if tab_events else None,
+            )
+            block_end = next(
+                (
+                    e.get("date")
+                    for e in tab_events
+                    if str(e.get("name", "")).strip().lower() == "end"
+                ),
+                tab_events[-1].get("date") if tab_events else None,
+            )
+            event_details = [
+                f"{e.get('name')}: {e.get('date')} ({e.get('status', '')})"
+                for e in tab_events
+            ]
+            block_summaries.append(
+                {
+                    "label": label,
+                    "block_start": block_start,
+                    "block_end": block_end,
+                    "event_count": len(tab_events),
+                    "events": event_details[:4],
+                }
+            )
+            cross_block_events.extend(
+                [f"{label} — {detail}" for detail in event_details[:3]]
+            )
+
+        payload_dict["card_scope"] = "full_year" if len(tabs) >= 6 else "semester"
+        payload_dict["blocks_shown"] = block_summaries
+        payload_dict["key_events"] = cross_block_events[:18]
+    else:
+        events = card.get("events") or []
+        payload_dict["card_scope"] = "single_block"
+        payload_dict["key_events"] = [
+            f"{evt.get('name')}: {evt.get('date')} ({evt.get('status', '')})"
+            for evt in events
+            if isinstance(evt, dict)
+        ]
+
+    if source_context:
+        payload_dict["source_documents"] = source_context[:2000]
+
+    if chat_history:
+        recent = chat_history[-6:]
+        history_lines = []
+        for msg in recent:
+            role = getattr(msg, "role", "user")
+            content = getattr(msg, "content", "") or ""
+            if content.strip():
+                history_lines.append(f"{role}: {content[:200]}")
+        if history_lines:
+            payload_dict["conversation_history"] = history_lines
+
+    return payload_dict
+
+
+@observe(as_type="generation", name="calendar-card-explanation")
+async def _generate_card_explanation(
+    card: dict[str, Any],
+    user_query: str,
+    source_context: str = "",
+    chat_history: list | None = None,
+) -> str:
+    """Generate a brief explanatory sentence from the card data and source documents."""
+    payload_dict = _build_card_explanation_payload(
+        card,
+        user_query,
+        source_context=source_context,
+        chat_history=chat_history,
+    )
+    payload = json.dumps(payload_dict, ensure_ascii=False)
+
+    today = date.today()
+    queried_year = _extract_year_from_card(card)
+    try:
+        response = await Settings.llm.achat(
+            messages=[
+                ChatMessage(role=MessageRole.SYSTEM, content=_card_explanation_prompt(today, queried_year)),
+                ChatMessage(role=MessageRole.USER, content=payload),
+            ],
+        )
+        output = (response.message.content or "").strip()
+        langfuse_context.update_current_observation(
+            model=os.environ.get("MODEL", "gpt-4o-mini"),
+            input=payload,
+            output=output,
+        )
+        return output
+    except Exception as e:
+        logger.warning("Card explanation generation failed: %s", e)
+        return ""
+
+
+async def build_secondary_calendar_text(
+    args: CalendarToolArgs,
+    card: dict[str, Any],
+    user_query: Optional[str],
+    source_context: str = "",
+    chat_history: list | None = None,
+) -> dict[str, Any]:
+    """Build post-card text plan using LLM classification."""
+    query = (user_query or "").strip()
+    if not query:
+        return {"mode": "calendar_context", "confidence": 0.9, "reason": "no_query", "text": ""}
+
+    llm_plan = await _classify_secondary_text_mode_llm(args, card, query)
+    if not llm_plan:
+        return {"mode": "calendar_context", "confidence": 0.5, "reason": "llm_failed", "text": ""}
+
+    mode = str(llm_plan.get("mode") or "calendar_context").strip().lower()
+    confidence = _clamp_confidence(llm_plan.get("confidence"), 0.5)
+    reason = str(llm_plan.get("reason") or "llm_classifier").strip() or "llm_classifier"
+
+    if mode == "rag_context":
+        return {"mode": "rag_context", "confidence": confidence, "reason": reason, "text": ""}
+
+    if mode == "clarification":
+        return {
+            "mode": "clarification",
+            "confidence": confidence,
+            "reason": reason,
+            "text": (
+                "I've walked through the calendar deadlines above. "
+                "It looks like there's more to your question. I'm ready to help with the rest whenever you are."
+            ),
+        }
+
+    # For calendar_context: generate a brief explanation from the card data + source docs
+    explanation = await _generate_card_explanation(
+        card, query, source_context=source_context, chat_history=chat_history,
+    )
+    return {"mode": "calendar_context", "confidence": confidence, "reason": reason, "text": explanation}
+
+
+def build_calendar_intro(args: CalendarToolArgs) -> str:
+    """Build a short intro sentence for a calendar card."""
+    qt = args.query_type.value
+    scope = (getattr(args, "scope", "term") or "term").lower()
+    season_raw = _normalize_season(args.season)
+    season = season_raw.capitalize() if season_raw else ""
+    year = args.year
+
+    def _block_label() -> str:
+        canonical = _season_for_block(args.block_number) or season_raw
+        if canonical:
+            return f"{canonical.capitalize()} {year} \u2014 Block {args.block_number}"
+        return f"Block {args.block_number} ({year})"
+
+    def _scope_label() -> str:
+        if args.block_number:
+            return _block_label()
+        if season:
+            return f"{season} {year}"
+        return str(year)
+
+    if qt == "block" and args.block_number:
+        return f"Here are the key dates for {_block_label()}:"
+
+    if qt == "semester":
+        if scope == "full_year":
+            return f"Here's the full {year} academic calendar:"
+        if season:
+            return f"Here are the key dates for {season} {year}:"
+        return f"Here's the {year} academic calendar:"
+
+    if qt == "deadline":
+        if args.specific_deadline:
+            deadline = _humanize_deadline(args.specific_deadline)
+            return f"Here's the {deadline} deadline for {_scope_label()}:"
+        if args.block_number:
+            return f"Here are the key deadlines for {_block_label()}:"
+        return f"Here are the key deadlines for {_scope_label()}:"
+
+    if qt == "graduation":
+        if season:
+            return f"Here are the {season} {year} graduation dates:"
+        return f"Here are the {year} graduation dates:"
+
+    if season:
+        return f"Here's the {season} {year} calendar:"
+    return f"Here's the academic calendar for {year}:"
+
+
+def build_initial_calendar_metadata(args: CalendarToolArgs) -> dict[str, Any]:
+    return {
+        "mode": "calendar",
+        "router_args": {
+            "query_type": args.query_type.value,
+            "scope": getattr(args, "scope", "term"),
+            "year": args.year,
+            "season": args.season,
+            "block_number": args.block_number,
+            "specific_deadline": args.specific_deadline,
+            "timezone": args.timezone,
+        },
+        "pipeline_status": "detected",
+    }
+
+
+@observe(name="calendar-pipeline")
+async def run_calendar_pipeline(
+    calendar_args: Optional[CalendarToolArgs],
+    shared_index: Any,
+    user_query: Optional[str] = None,
+    user_language: Optional[str] = None,
+    chat_history: list | None = None,
+    skip_cache: bool = False,
+    progress_queue: Optional[asyncio.Queue] = None,
+) -> tuple[Optional[dict], dict[str, Any]]:
+    """Run calendar retrieval+extraction+card build, returning card and metadata."""
+    # Set clean trace input for Langfuse UI (instead of raw function args)
+    _pipeline_input = user_query or "(no query)"
+    if calendar_args is not None:
+        _scope_parts = [calendar_args.query_type.value]
+        if calendar_args.season:
+            _scope_parts.append(calendar_args.season)
+        if calendar_args.year:
+            _scope_parts.append(str(calendar_args.year))
+        if calendar_args.block_number:
+            _scope_parts.append(f"block {calendar_args.block_number}")
+        if calendar_args.specific_deadline:
+            _scope_parts.append(calendar_args.specific_deadline)
+        _pipeline_input += f" [{' | '.join(_scope_parts)}]"
+    langfuse_context.update_current_trace(
+        input=_pipeline_input,
+    )
+
+    metadata: dict[str, Any] = {}
+
+    async def _report(stage: str) -> None:
+        """Push a stage name onto the progress queue (non-blocking)."""
+        if progress_queue is not None:
+            try:
+                progress_queue.put_nowait(stage)
+            except asyncio.QueueFull:
+                pass
+
+    if calendar_args is None:
+        logger.warning("Calendar pipeline: calendar_args is None, skipping")
+        metadata["pipeline_status"] = "skipped_no_args"
+        return None, metadata
+
+    try:
+        # Phase 3: check cache before doing any work
+        if skip_cache:
+            logger.info("Calendar pipeline: cache bypassed (pushback/re-evaluation)")
+            cached = None
+        else:
+            cached = calendar_cache.get(calendar_args)
+        if cached is not None:
+            card, cached_meta = cached
+            card = dict(card)  # shallow copy so we don't mutate the cached entry
+            cached_meta = dict(cached_meta)
+            cached_meta["cache_hit"] = True
+
+            # Regenerate post-card text for this user's specific question
+            secondary_plan = await build_secondary_calendar_text(
+                calendar_args, card, user_query=user_query, chat_history=chat_history,
+            )
+            card["secondaryTextMode"] = secondary_plan.get("mode")
+            card["secondaryTextConfidence"] = secondary_plan.get("confidence")
+            secondary_text = str(secondary_plan.get("text") or "").strip()
+            if secondary_text:
+                secondary_text = await localize_calendar_intro(
+                    secondary_text,
+                    user_language=user_language,
+                    original_user_message=user_query or "",
+                )
+                card["postCardText"] = secondary_text
+            else:
+                card.pop("postCardText", None)
+
+            return card, cached_meta
+
+        if shared_index is None:
+            logger.warning("Calendar pipeline: shared_index is None, skipping")
+            metadata["pipeline_status"] = "skipped_no_index"
+            return None, metadata
+
+        logger.info("Calendar pipeline: creating retriever...")
+        await _report("retrieval")
+        scope = (getattr(calendar_args, "scope", "term") or "term").lower()
+        is_graduation = calendar_args.query_type.value == "graduation"
+        if scope == "full_year":
+            retriever = shared_index.as_retriever(similarity_top_k=8, sparse_top_k=30)
+        elif is_graduation:
+            # Graduation nodes: the top few matches are often footnote-only
+            # text; the actual date tables sit at positions 5-8 in Pinecone.
+            # Use a higher top_k to ensure we retrieve the table nodes.
+            retriever = shared_index.as_retriever(similarity_top_k=8, sparse_top_k=20)
+        else:
+            retriever = shared_index.as_retriever(similarity_top_k=3, sparse_top_k=15)
+
+        logger.info("Calendar pipeline: querying Pinecone...")
+        nodes = await query_pinecone_for_calendar(calendar_args, retriever)
+
+        is_semester_term = (
+            scope != "full_year"
+            and calendar_args.query_type.value == "semester"
+            and calendar_args.season
+        )
+
+        if is_semester_term and calendar_args.year:
+            # Semester query (e.g., "Show me Winter 2025"): expand to both blocks
+            _SEASON_BLOCKS = {"winter": (1, 2), "spring": (3, 4), "fall": (5, 6)}
+            lo, hi = _SEASON_BLOCKS.get(calendar_args.season, (1, 2))
+            block_queries = [
+                f"academic calendar {calendar_args.year} block {b} "
+                f"start end dates deadlines"
+                for b in (lo, hi)
+            ]
+            logger.info(
+                "Calendar pipeline: firing %d semester expansion queries in parallel",
+                len(block_queries),
+            )
+            results = await asyncio.gather(
+                *(retriever.aretrieve(q) for q in block_queries),
+                return_exceptions=True,
+            )
+            for result in results:
+                if not isinstance(result, BaseException):
+                    nodes = _merge_nodes(nodes, result, max_nodes=16)
+            metadata["retrieval_mode"] = "semester_expanded"
+
+        if (
+            scope == "full_year"
+            and calendar_args.query_type.value == "semester"
+            and calendar_args.year
+        ):
+            # Phase 1: fire all 9 expansion queries in parallel
+            season_queries = [
+                f"academic calendar {calendar_args.year} {season} "
+                f"start end dates deadlines block"
+                for season in ("winter", "spring", "fall")
+            ]
+            block_queries = [
+                f"academic calendar {calendar_args.year} block {block} "
+                f"start end dates deadlines"
+                for block in range(1, 7)
+            ]
+            all_queries = season_queries + block_queries
+
+            logger.info(
+                "Calendar pipeline: firing %d expansion queries in parallel",
+                len(all_queries),
+            )
+            results = await asyncio.gather(
+                *(retriever.aretrieve(q) for q in all_queries),
+                return_exceptions=True,
+            )
+
+            expanded_nodes: list[Any] = []
+            for idx, result in enumerate(results):
+                if isinstance(result, BaseException):
+                    logger.warning(
+                        "Calendar pipeline: expansion query %d failed: %s",
+                        idx,
+                        result,
+                    )
+                    continue
+                expanded_nodes = _merge_nodes(expanded_nodes, result, max_nodes=30)
+
+            if expanded_nodes:
+                nodes = _merge_nodes(nodes, expanded_nodes, max_nodes=30)
+                metadata["retrieval_mode"] = "full_year_expanded"
+
+            nodes = _prioritize_nodes_for_full_year_blocks(
+                nodes,
+                calendar_args.year,
+                max_nodes=16,
+            )
+            metadata["retrieval_mode"] = (
+                f"{metadata.get('retrieval_mode', 'full_year')}+block_coverage_prioritized"
+            )
+
+        if not nodes:
+            logger.warning("Calendar pipeline: no Pinecone nodes returned")
+            metadata["pipeline_status"] = "no_nodes"
+            return None, metadata
+
+        logger.info("Calendar pipeline: got %d nodes", len(nodes))
+        metadata.update(_build_retrieved_docs_metadata(nodes))
+
+        available_years = _available_years_from_nodes(nodes)
+        if available_years:
+            metadata["available_years_from_nodes"] = available_years
+            if calendar_args.year not in available_years:
+                logger.warning(
+                    "Calendar pipeline: requested year %s not found in initial source years %s; retrying strict-year retrieval",
+                    calendar_args.year,
+                    available_years,
+                )
+
+                strict_query = (
+                    f"academic calendar {calendar_args.year} "
+                    f"{calendar_args.year} Start/End Dates & Deadlines"
+                )
+                resolved_season = calendar_args.season or _season_for_block(
+                    calendar_args.block_number
+                )
+                if resolved_season:
+                    strict_query += f" {resolved_season}"
+                if calendar_args.block_number:
+                    strict_query += f" block {calendar_args.block_number}"
+
+                strict_nodes = await retriever.aretrieve(strict_query)
+                if strict_nodes:
+                    nodes = strict_nodes
+                    metadata.update(_build_retrieved_docs_metadata(nodes))
+                    metadata["retrieval_mode"] = "strict_year_retry"
+                    available_years = _available_years_from_nodes(nodes)
+                    metadata["available_years_from_nodes"] = available_years
+
+                if calendar_args.year not in available_years:
+                    logger.warning(
+                        "Calendar pipeline: requested year %s still not found after strict retry; years=%s",
+                        calendar_args.year,
+                        available_years,
+                    )
+                    metadata["pipeline_status"] = "unsupported_year"
+                    metadata["requested_year"] = calendar_args.year
+                    return None, metadata
+
+        logger.info("Calendar pipeline: extracting structured data...")
+        await _report("extraction")
+        if scope == "full_year":
+            extracted = await extract_full_year_by_semester(nodes, calendar_args)
+        elif is_semester_term:
+            # Semester query: extract the 2 blocks for this season
+            extracted = await extract_structured_data(
+                nodes, calendar_args, semester_focus=calendar_args.season
+            )
+        else:
+            extracted = await extract_structured_data(nodes, calendar_args)
+        if not extracted:
+            logger.warning("Calendar pipeline: structured extraction failed")
+            metadata["pipeline_status"] = "extraction_failed"
+            return None, metadata
+
+        if (
+            calendar_args.query_type.value == "block"
+            and calendar_args.block_number
+            and is_block_extraction_misaligned(extracted, calendar_args)
+        ):
+            logger.warning(
+                "Calendar pipeline: block extraction appears misaligned (block=%s year=%s); retrying strict block extraction",
+                calendar_args.block_number,
+                calendar_args.year,
+            )
+
+            resolved_season = calendar_args.season or _season_for_block(
+                calendar_args.block_number
+            )
+            strict_block_query = (
+                f"academic calendar {calendar_args.year} "
+                f"{resolved_season or ''} block {calendar_args.block_number} "
+                "start end dates deadlines"
+            ).strip()
+            strict_block_nodes = await retriever.aretrieve(strict_block_query)
+            if strict_block_nodes:
+                metadata.update(_build_retrieved_docs_metadata(strict_block_nodes))
+                metadata["retrieval_mode"] = "strict_block_retry"
+                strict_extracted = await extract_structured_data(
+                    strict_block_nodes,
+                    calendar_args,
+                )
+                if strict_extracted and not is_block_extraction_misaligned(
+                    strict_extracted,
+                    calendar_args,
+                ):
+                    extracted = strict_extracted
+                    logger.info("Calendar pipeline: strict block extraction corrected alignment")
+                else:
+                    logger.warning(
+                        "Calendar pipeline: strict block retry did not improve alignment; keeping original extraction"
+                    )
+
+        logger.info("Calendar pipeline: extracted %d events", len(extracted.events))
+        metadata.update(
+            {
+                "pipeline_status": "extracted",
+                "extracted": {
+                    "title": extracted.title,
+                    "subtitle": extracted.subtitle,
+                    "start": extracted.block_or_semester_start,
+                    "end": extracted.block_or_semester_end,
+                    "event_count": len(extracted.events),
+                    "events": [
+                        {"date": evt.date, "name": evt.name}
+                        for evt in extracted.events[:40]
+                    ],
+                },
+            }
+        )
+
+        today: date = _get_today(calendar_args.timezone)
+        await _report("building")
+        card = build_calendar_card(extracted, calendar_args, today)
+        if card is None:
+            logger.warning(
+                "Calendar pipeline: card failed self-verification — returning None"
+            )
+            metadata["pipeline_status"] = "card_verification_failed"
+            return None, metadata
+
+        card["suggestedQuestions"] = compute_suggestions(
+            calendar_args,
+            extracted,
+            user_query=user_query,
+        )
+
+        # Build source context from raw Pinecone nodes so the explanation
+        # LLM has full document data (like RAG would) to answer accurately.
+        source_context = "\n\n---\n\n".join(
+            n.text for n in nodes[:6] if hasattr(n, "text")
+        )[:2000]
+
+        secondary_plan = await build_secondary_calendar_text(
+            calendar_args,
+            card,
+            user_query=user_query,
+            source_context=source_context,
+            chat_history=chat_history,
+        )
+        card["secondaryTextMode"] = secondary_plan.get("mode")
+        card["secondaryTextConfidence"] = secondary_plan.get("confidence")
+
+        secondary_text = str(secondary_plan.get("text") or "").strip()
+        if secondary_text:
+            secondary_text = await localize_calendar_intro(
+                secondary_text,
+                user_language=user_language,
+                original_user_message=user_query or "",
+            )
+            card["postCardText"] = secondary_text
+
+        card = await localize_calendar_card(
+            card,
+            user_language=user_language,
+            original_user_message=user_query or "",
+        )
+        metadata.update(
+            {
+                "pipeline_status": "success",
+                "card": {
+                    "title": card.get("title"),
+                    "subtitle": card.get("subtitle"),
+                    "status": card.get("status"),
+                    "type": card.get("type"),
+                    "event_count": len(card.get("events", [])),
+                    "spotlight": card.get("spotlight", {}).get("title")
+                    if card.get("spotlight")
+                    else None,
+                },
+                "secondary_text": {
+                    "mode": secondary_plan.get("mode"),
+                    "confidence": secondary_plan.get("confidence"),
+                    "reason": secondary_plan.get("reason"),
+                },
+            }
+        )
+        logger.info("Calendar pipeline: card built & verified successfully")
+
+        # Set clean trace output for Langfuse UI
+        _output_summary = card.get("title", "")
+        if card.get("subtitle"):
+            _output_summary += f" — {card['subtitle']}"
+        _evt_count = len(card.get("events") or [])
+        _tab_count = len(card.get("tabs") or [])
+        if _tab_count:
+            _tab_evts = sum(len(t.get("events", [])) for t in card.get("tabs", []) if isinstance(t, dict))
+            _output_summary += f" ({_tab_count} tabs, {_tab_evts} events)"
+        elif _evt_count:
+            _output_summary += f" ({_evt_count} events)"
+        if card.get("postCardText"):
+            _output_summary += f"\n{card['postCardText']}"
+        langfuse_context.update_current_trace(output=_output_summary)
+
+        # Phase 3: cache the card without post-card text (it's
+        # conversation-specific and regenerated on cache hits).
+        card_to_cache = {k: v for k, v in card.items() if k != "postCardText"}
+        meta_to_cache = {k: v for k, v in metadata.items() if k != "secondary_text"}
+        calendar_cache.put(calendar_args, card_to_cache, meta_to_cache)
+
+        return card, metadata
+
+    except Exception as e:
+        logger.error(f"Calendar pipeline error: {e}", exc_info=True)
+        metadata.update({"pipeline_status": "error", "pipeline_error": str(e)})
+        langfuse_context.update_current_trace(output=f"ERROR: {e}")
+        return None, metadata
