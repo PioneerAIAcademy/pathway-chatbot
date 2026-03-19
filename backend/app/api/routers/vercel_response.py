@@ -33,6 +33,90 @@ from app.utils.date_spans import extract_date_spans
 
 logger = logging.getLogger("uvicorn")
 
+# --- Localized calendar error/fallback messages ---
+_CALENDAR_MESSAGES = {
+    "unsupported_year": {
+        "en": "I don't have verified academic calendar dates for {year} yet. I currently have official dates for: {years}. {link}",
+        "es": "Aún no tengo fechas verificadas del calendario académico para {year}. Actualmente tengo fechas oficiales para: {years}. {link}",
+        "pt": "Ainda não tenho datas verificadas do calendário acadêmico para {year}. Atualmente tenho datas oficiais para: {years}. {link}",
+        "fr": "Je n'ai pas encore de dates vérifiées du calendrier académique pour {year}. J'ai actuellement des dates officielles pour : {years}. {link}",
+        "it": "Non ho ancora date verificate del calendario accademico per {year}. Attualmente ho date ufficiali per: {years}. {link}",
+        "nl": "Ik heb nog geen geverifieerde academische kalenderdatums voor {year}. Ik heb momenteel officiële datums voor: {years}. {link}",
+        "de": "Ich habe noch keine verifizierten akademischen Kalenderdaten für {year}. Derzeit habe ich offizielle Daten für: {years}. {link}",
+        "cs": "Zatím nemám ověřené datum akademického kalendáře pro {year}. Aktuálně mám oficiální data pro: {years}. {link}",
+        "pl": "Nie mam jeszcze zweryfikowanych dat kalendarza akademickiego na {year}. Obecnie mam oficjalne daty na: {years}. {link}",
+        "vi": "Tôi chưa có ngày lịch học chính thức cho {year}. Hiện tại tôi có ngày chính thức cho: {years}. {link}",
+    },
+    "unsupported_year_no_list": {
+        "en": "I don't have verified academic calendar dates for {year} yet. {link}",
+        "es": "Aún no tengo fechas verificadas del calendario académico para {year}. {link}",
+        "pt": "Ainda não tenho datas verificadas do calendário acadêmico para {year}. {link}",
+        "fr": "Je n'ai pas encore de dates vérifiées du calendrier académique pour {year}. {link}",
+        "it": "Non ho ancora date verificate del calendario accademico per {year}. {link}",
+        "nl": "Ik heb nog geen geverifieerde academische kalenderdatums voor {year}. {link}",
+        "de": "Ich habe noch keine verifizierten akademischen Kalenderdaten für {year}. {link}",
+        "cs": "Zatím nemám ověřené datum akademického kalendáře pro {year}. {link}",
+        "pl": "Nie mam jeszcze zweryfikowanych dat kalendarza akademickiego na {year}. {link}",
+        "vi": "Tôi chưa có ngày lịch học chính thức cho {year}. {link}",
+    },
+    "calendar_load_error": {
+        "en": "I couldn't load the academic calendar right now. Please try again.",
+        "es": "No pude cargar el calendario académico en este momento. Por favor, inténtalo de nuevo.",
+        "pt": "Não consegui carregar o calendário acadêmico agora. Por favor, tente novamente.",
+        "fr": "Je n'ai pas pu charger le calendrier académique pour le moment. Veuillez réessayer.",
+        "it": "Non sono riuscito a caricare il calendario accademico al momento. Per favore riprova.",
+        "nl": "Ik kon de academische kalender nu niet laden. Probeer het opnieuw.",
+        "de": "Ich konnte den akademischen Kalender gerade nicht laden. Bitte versuche es erneut.",
+        "cs": "Nepodařilo se načíst akademický kalendář. Zkuste to prosím znovu.",
+        "pl": "Nie udało się załadować kalendarza akademickiego. Spróbuj ponownie.",
+        "vi": "Tôi không thể tải lịch học ngay bây giờ. Vui lòng thử lại.",
+    },
+    "calendar_not_found": {
+        "en": "I couldn't find calendar data for that request.",
+        "es": "No pude encontrar datos del calendario para esa solicitud.",
+        "pt": "Não encontrei dados do calendário para essa solicitação.",
+        "fr": "Je n'ai pas trouvé de données de calendrier pour cette demande.",
+        "it": "Non ho trovato dati del calendario per quella richiesta.",
+        "nl": "Ik kon geen kalendergegevens vinden voor dat verzoek.",
+        "de": "Ich konnte keine Kalenderdaten für diese Anfrage finden.",
+        "cs": "Nepodařilo se najít data kalendáře pro tento požadavek.",
+        "pl": "Nie znaleziono danych kalendarza dla tego zapytania.",
+        "vi": "Tôi không tìm thấy dữ liệu lịch cho yêu cầu đó.",
+    },
+    "calendar_link": {
+        "en": "For more information, visit the [Academic Calendar]({url}).",
+        "es": "Para más información, visita el [Calendario Académico]({url}).",
+        "pt": "Para mais informações, visite o [Calendário Acadêmico]({url}).",
+        "fr": "Pour plus d'informations, consultez le [Calendrier Académique]({url}).",
+        "it": "Per ulteriori informazioni, visita il [Calendario Accademico]({url}).",
+        "nl": "Voor meer informatie, bezoek de [Academische Kalender]({url}).",
+        "de": "Für weitere Informationen besuche den [Akademischen Kalender]({url}).",
+        "cs": "Pro více informací navštivte [Akademický kalendář]({url}).",
+        "pl": "Aby uzyskać więcej informacji, odwiedź [Kalendarz akademicki]({url}).",
+        "vi": "Để biết thêm thông tin, hãy truy cập [Lịch học]({url}).",
+    },
+    "text_format_offer": {
+        "en": "Should I list these dates in text format instead?",
+        "es": "¿Debería listar estas fechas en formato de texto?",
+        "pt": "Devo listar essas datas em formato de texto?",
+        "fr": "Dois-je lister ces dates en format texte ?",
+        "it": "Devo elencare queste date in formato testo?",
+        "nl": "Zal ik deze datums in tekstformaat weergeven?",
+        "de": "Soll ich diese Daten im Textformat auflisten?",
+        "cs": "Mám tyto datumy vypsat v textovém formátu?",
+        "pl": "Czy mam wypisać te daty w formacie tekstowym?",
+        "vi": "Tôi có nên liệt kê các ngày này ở dạng văn bản không?",
+    },
+}
+
+
+def _cal_msg(key: str, lang: str | None = None, **kwargs: Any) -> str:
+    """Get a localized calendar message, falling back to English."""
+    templates = _CALENDAR_MESSAGES.get(key, {})
+    template = templates.get(lang or "en") or templates.get("en", "")
+    return template.format(**kwargs)
+
+
 # Padding appended to every typewriter chunk so that the TCP payload is large
 # enough to bypass Nagle's algorithm and proxy write-coalescing.  The Vercel AI
 # SDK parser splits on "\n" and filters out empty lines, so extra newlines are
@@ -394,7 +478,7 @@ class VercelStreamResponse(StreamingResponse):
                             except Exception as rag_err:
                                 logger.error("RAG fallback also failed: %s", rag_err)
                         if not rag_used:
-                            fallback_msg = "I couldn't load the academic calendar right now. Please try again."
+                            fallback_msg = _cal_msg("calendar_load_error", user_language)
                             final_response = fallback_msg
                             for chunk in cls._iter_text_chunks(fallback_msg):
                                 yield cls.convert_text(chunk)
@@ -426,7 +510,7 @@ class VercelStreamResponse(StreamingResponse):
                             except Exception as rag_err:
                                 logger.error("RAG fallback also failed: %s", rag_err)
                         if not rag_used:
-                            fallback_msg = "I couldn't load the academic calendar right now. Please try again."
+                            fallback_msg = _cal_msg("calendar_load_error", user_language)
                             final_response = fallback_msg
                             for chunk in cls._iter_text_chunks(fallback_msg):
                                 yield cls.convert_text(chunk)
@@ -442,19 +526,12 @@ class VercelStreamResponse(StreamingResponse):
                     if isinstance(calendar_data, dict) and calendar_data.get("__calendar_error_reason") == "unsupported_year":
                         requested_year = calendar_data.get("requestedYear")
                         available_years = calendar_data.get("availableYears") or []
-                        calendar_link = f"For more information, visit the [Academic Calendar]({ACADEMIC_CALENDAR_URL})."
+                        cal_link = _cal_msg("calendar_link", user_language, url=ACADEMIC_CALENDAR_URL)
                         if available_years:
                             years_text = ", ".join(str(y) for y in available_years)
-                            message = (
-                                f"I don't have verified academic calendar dates for {requested_year} yet. "
-                                f"I currently have official dates for: {years_text}. "
-                                f"{calendar_link}"
-                            )
+                            message = _cal_msg("unsupported_year", user_language, year=requested_year, years=years_text, link=cal_link)
                         else:
-                            message = (
-                                f"I don't have verified academic calendar dates for {requested_year} yet. "
-                                f"{calendar_link}"
-                            )
+                            message = _cal_msg("unsupported_year_no_list", user_language, year=requested_year, link=cal_link)
                         final_response = message
                         for chunk in cls._iter_text_chunks(message):
                             yield cls.convert_text(chunk)
@@ -535,7 +612,7 @@ class VercelStreamResponse(StreamingResponse):
                             except Exception as rag_err:
                                 logger.error("RAG fallback (soft-fail) also failed: %s", rag_err)
                         if not rag_used:
-                            fallback = "I couldn't find calendar data for that request."
+                            fallback = _cal_msg("calendar_not_found", user_language)
                             final_response = fallback
                             for chunk in cls._iter_text_chunks(fallback):
                                 yield cls.convert_text(chunk)
@@ -753,7 +830,7 @@ def _build_calendar_patches(
                     "sourceUrl": calendar_data.get("sourceUrl", ""),
                     "suggestedQuestions": calendar_data.get("suggestedQuestions", []),
                     "footnote": calendar_data.get("footnote"),
-                    "textFormatOffer": "Should I list these dates in text format instead?",
+                    "textFormatOffer": _cal_msg("text_format_offer", user_language),
                 },
                 "trace_id": trace_id,
             }
