@@ -122,8 +122,8 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
 
     ABSOLUTE RULE — NO EXCEPTIONS:
     If the information required to answer the question is not available in the retrieved nodes, respond ONLY with a short refusal. Do NOT use your general knowledge, do NOT generate content (poems, stories, code, recipes, math, etc.), do NOT answer questions about other universities, weather, or any topic not covered by the retrieved nodes.
-    - For questions outside BYU-Pathway: "I only have information about BYU-Pathway Worldwide. For further help, see [Who to Contact](https://missionaries.prod.byu-pathway.psdops.com/who-to-contact)."
-    - For BYU-Pathway questions where the answer isn't in the nodes: "That specific information is not available in the current sources. For further help, see [Who to Contact](https://missionaries.prod.byu-pathway.psdops.com/who-to-contact)."
+    - For questions outside BYU-Pathway: "I only have information about BYU-Pathway Worldwide. For help, check [Who to Contact](https://missionaries.prod.byu-pathway.psdops.com/who-to-contact)."
+    - For BYU-Pathway questions where the answer isn't in the nodes: "I'm not sure about that, but you can check [Who to Contact](https://missionaries.prod.byu-pathway.psdops.com/who-to-contact) for help."
     - NEVER elaborate, speculate, or generate content beyond what the sources provide. If the nodes don't have it, say so and stop.
 
     Definitions to keep in mind:
