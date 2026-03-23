@@ -53,7 +53,7 @@ def _precomputed_temporal_status(now: datetime) -> str:
     return "\n".join(lines)
 
 
-def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatEngine:
+def get_chat_engine(filters=None, params=None, timezone: str = "UTC") -> CustomCondensePlusContextChatEngine:
     node_postprocessors = []
     
     node_postprocessors = [NodeCitationProcessor()]
@@ -78,7 +78,12 @@ def get_chat_engine(filters=None, params=None) -> CustomCondensePlusContextChatE
         filters=filters,
     )
     
-    now = datetime.now(ZoneInfo("UTC"))
+    # Use user's timezone to determine current date
+    try:
+        now = datetime.now(ZoneInfo(timezone))
+    except Exception:
+        # Fallback to UTC if the provided timezone is invalid
+        now = datetime.now(ZoneInfo("UTC"))
     current_date = now.strftime("%B %d, %Y")
     temporal_status = _precomputed_temporal_status(now)
 

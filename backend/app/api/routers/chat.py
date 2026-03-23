@@ -437,7 +437,7 @@ async def chat(
 
             rag_engine = None
             try:
-                rag_engine = get_chat_engine(filters=filters, params=params)
+                rag_engine = get_chat_engine(filters=filters, params=params, timezone=user_timezone)
                 followup_prompt = (
                     "A calendar card is already displayed showing relevant dates and deadlines. "
                     "Now provide a helpful text answer to the user's question in 2-4 concise sentences. "
@@ -577,7 +577,7 @@ async def chat(
             logger.info(
                 f"Creating chat engine with filters: {str(filters)}",
             )
-            chat_engine = get_chat_engine(filters=filters, params=params)
+            chat_engine = get_chat_engine(filters=filters, params=params, timezone=user_timezone)
             chat_engine.callback_manager.handlers.append(event_handler)  # type: ignore
 
             response = await chat_engine.astream_chat(last_message_content, messages)
@@ -602,7 +602,7 @@ async def chat(
 
         async def _rag_fallback_for_calendar():
             """If calendar pipeline times out, answer via normal RAG."""
-            engine = get_chat_engine(filters=filters, params=params)
+            engine = get_chat_engine(filters=filters, params=params, timezone=user_timezone)
             engine.callback_manager.handlers.append(event_handler)
             return await engine.astream_chat(last_message_content, messages)
 
@@ -735,10 +735,11 @@ async def chat_request(
         params = data.data or {}
         role = params.get("role", "missionary")
         filters = generate_filters(doc_ids, role)
+        user_timezone = request.headers.get("X-Timezone", "UTC")
         logger.info(
             f"Creating chat engine with filters: {str(filters)}",
         )
-        chat_engine = get_chat_engine(filters=filters, params=params)
+        chat_engine = get_chat_engine(filters=filters, params=params, timezone=user_timezone)
 
         response = await chat_engine.achat(last_message_content, messages)
 
