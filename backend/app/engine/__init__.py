@@ -78,17 +78,25 @@ def get_chat_engine(filters=None, params=None, timezone: str = "UTC") -> CustomC
         filters=filters,
     )
     
-    # Use user's timezone to determine current date
+    # Use user's timezone to determine current date and time
     try:
         now = datetime.now(ZoneInfo(timezone))
+        tz_name = timezone
     except Exception:
         # Fallback to UTC if the provided timezone is invalid
         now = datetime.now(ZoneInfo("UTC"))
+        tz_name = "UTC"
+    
+    # Format: "March 23, 2026 at 9:17 AM MDT"
     current_date = now.strftime("%B %d, %Y")
+    current_time = now.strftime("%I:%M %p").lstrip('0')  # Remove leading zero from hour
+    tz_abbr = now.strftime("%Z")  # Timezone abbreviation (e.g., MDT, PST, UTC)
+    current_datetime = f"{current_date} at {current_time} {tz_abbr}"
+    
     temporal_status = _precomputed_temporal_status(now)
 
     SYSTEM_CITATION_PROMPT = f"""
-    IMPORTANT - Today's date is {current_date}. Use this information when answering questions about dates, deadlines, terms, blocks, semesters, and the academic calendar. If the user asks what today's date is, tell them directly.
+    IMPORTANT - Today's date and time is {current_datetime}. Use this information when answering questions about dates, times, deadlines, terms, blocks, semesters, and the academic calendar. If the user asks what today's date is or what time it is, tell them directly.
 
     {temporal_status}
 
